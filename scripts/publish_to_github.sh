@@ -28,6 +28,7 @@ EXPECTED_URL="git@github.com:${OWNER_REPO}.git"
 PUSH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_PAT:-${GH_PAT:-}}}}"
 ORIGINAL_REMOTE_URL=""
 RESTORE_REMOTE_URL=0
+TARGET_REMOTE_URL=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -43,13 +44,26 @@ fi
 if ! git -C "$PROJECT_ROOT" remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
   git -C "$PROJECT_ROOT" remote add "$REMOTE_NAME" "$EXPECTED_URL"
 else
-  EXISTING_URL="$(git -C "$PROJECT_ROOT" remote get-url "$REMOTE_NAME")"
-  ORIGINAL_REMOTE_URL="$EXISTING_URL"
+  ORIGINAL_REMOTE_URL="$(git -C "$PROJECT_ROOT" remote get-url "$REMOTE_NAME")"
   RESTORE_REMOTE_URL=1
-  if [[ "$EXISTING_URL" != *"github.com"* || "$EXISTING_URL" != *"${OWNER_REPO}"* ]]; then
-    echo "warning: remote '$REMOTE_NAME' currently points to '${EXISTING_URL}'. Repointing to ${EXPECTED_URL}." >&2
-    git -C "$PROJECT_ROOT" remote set-url "$REMOTE_NAME" "$EXPECTED_URL"
+  if [[ "$ORIGINAL_REMOTE_URL" != *"github.com"* || "$ORIGINAL_REMOTE_URL" != *"${OWNER_REPO}"* ]]; then
+    echo "warning: remote '$REMOTE_NAME' currently points to '${ORIGINAL_REMOTE_URL}'." >&2
   fi
+fi
+
+if [[ -n "$PUSH_TOKEN" ]]; then
+  TARGET_REMOTE_URL="https://x-access-token:${PUSH_TOKEN}@github.com/${OWNER_REPO}.git"
+  echo "Using token-auth HTTPS for publish to ${OWNER_REPO}." >&2
+else
+  TARGET_REMOTE_URL="$EXPECTED_URL"
+  if [[ -n "$ORIGINAL_REMOTE_URL" && ( "$ORIGINAL_REMOTE_URL" != *"github.com"* || "$ORIGINAL_REMOTE_URL" != *"${OWNER_REPO}"* ) ]]; then
+    echo "warning: remote '$REMOTE_NAME' currently points to '${ORIGINAL_REMOTE_URL}'. Repointing to ${EXPECTED_URL}." >&2
+    ORIGINAL_REMOTE_URL="$EXPECTED_URL"
+  fi
+fi
+
+if [[ "$ORIGINAL_REMOTE_URL" != "$TARGET_REMOTE_URL" ]]; then
+  git -C "$PROJECT_ROOT" remote set-url "$REMOTE_NAME" "$TARGET_REMOTE_URL"
 fi
 
 restore_remote_url() {
@@ -58,15 +72,7 @@ restore_remote_url() {
   fi
 }
 
-restore_https_remote() {
-  if [[ -n "$ORIGINAL_REMOTE_URL" ]]; then
-    git -C "$PROJECT_ROOT" remote set-url "$REMOTE_NAME" "$ORIGINAL_REMOTE_URL"
-  else
-    git -C "$PROJECT_ROOT" remote set-url "$REMOTE_NAME" "$EXPECTED_URL"
-  fi
-}
-
-push_with_auth_fallback() {
+push_ref() {
   local ref=$1
   local attempt_output attempt_status
   attempt_output="$(mktemp)"
@@ -77,22 +83,8 @@ push_with_auth_fallback() {
   set -e
 
   if [[ $attempt_status -eq 0 ]]; then
+    echo "Pushed ${ref} to ${REMOTE_NAME}"
     return 0
-  fi
-
-  if [[ -n "$PUSH_TOKEN" ]] && grep -qE "Permission denied .*publickey|Authentication failed" "$attempt_output"; then
-    local https_url="https://x-access-token:${PUSH_TOKEN}@github.com/${OWNER_REPO}.git"
-    git -C "$PROJECT_ROOT" remote set-url "$REMOTE_NAME" "$https_url"
-
-    set +e
-    git -C "$PROJECT_ROOT" push "$REMOTE_NAME" "$ref" >>"$attempt_output" 2>&1
-    attempt_status=$?
-    set -e
-
-    if [[ $attempt_status -eq 0 ]]; then
-      restore_https_remote
-      return 0
-    fi
   fi
 
   echo "error: failed to push ${ref}." >&2
@@ -100,7 +92,7 @@ push_with_auth_fallback() {
   return 1
 }
 
-fetch_with_auth_fallback() {
+fetch_with_target_remote() {
   local attempt_output attempt_status
   attempt_output="$(mktemp)"
 
@@ -110,22 +102,8 @@ fetch_with_auth_fallback() {
   set -e
 
   if [[ $attempt_status -eq 0 ]]; then
+    echo "Fetched tags from ${REMOTE_NAME}."
     return 0
-  fi
-
-  if [[ -n "$PUSH_TOKEN" ]] && grep -qE "Permission denied .*publickey|Authentication failed" "$attempt_output"; then
-    local https_url="https://x-access-token:${PUSH_TOKEN}@github.com/${OWNER_REPO}.git"
-    git -C "$PROJECT_ROOT" remote set-url "$REMOTE_NAME" "$https_url"
-
-    set +e
-    git -C "$PROJECT_ROOT" fetch "$REMOTE_NAME" --tags >>"$attempt_output" 2>&1
-    attempt_status=$?
-    set -e
-
-    if [[ $attempt_status -eq 0 ]]; then
-      restore_https_remote
-      return 0
-    fi
   fi
 
   echo "error: failed to fetch tags from ${REMOTE_NAME}." >&2
@@ -135,7 +113,7 @@ fetch_with_auth_fallback() {
 
 trap 'restore_remote_url' EXIT INT TERM
 
-fetch_with_auth_fallback
+fetch_with_target_remote
 CURRENT_BRANCH="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD)"
 if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
   CURRENT_BRANCH="$FALLBACK_BRANCH"
@@ -144,13 +122,13 @@ if ! git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/${CURRENT_BRAN
   echo "error: cannot determine branch to push (detached HEAD, fallback '${CURRENT_BRANCH}' missing)." >&2
   exit 1
 fi
-push_with_auth_fallback "$CURRENT_BRANCH"
+push_ref "$CURRENT_BRANCH"
 
 if ! git -C "$PROJECT_ROOT" ls-remote --heads "$REMOTE_NAME" | grep -q "refs/heads/${CURRENT_BRANCH}"; then
   echo "error: remote '${REMOTE_NAME}' has no branch refs after push; release creation will fail on empty repo." >&2
   exit 1
 fi
-push_with_auth_fallback "$TAG"
+push_ref "$TAG"
 
 "$SCRIPT_DIR/package_tallinn_widgets.sh" "${TAG#v}"
 PACKAGE_PATH="$(ls -1 "$PROJECT_ROOT/dist/tallinn_widgets-${TAG#v}.tar.gz")"
