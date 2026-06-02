@@ -80,7 +80,7 @@ push_with_auth_fallback() {
     return 0
   fi
 
-  if [[ -n "$PUSH_TOKEN" ]] && grep -q "Permission denied (publickey)" "$attempt_output"; then
+  if [[ -n "$PUSH_TOKEN" ]] && grep -qE "Permission denied .*publickey|Authentication failed" "$attempt_output"; then
     local https_url="https://x-access-token:${PUSH_TOKEN}@github.com/${OWNER_REPO}.git"
     git -C "$PROJECT_ROOT" remote set-url "$REMOTE_NAME" "$https_url"
 
@@ -100,9 +100,42 @@ push_with_auth_fallback() {
   return 1
 }
 
+fetch_with_auth_fallback() {
+  local attempt_output attempt_status
+  attempt_output="$(mktemp)"
+
+  set +e
+  git -C "$PROJECT_ROOT" fetch "$REMOTE_NAME" --tags >"$attempt_output" 2>&1
+  attempt_status=$?
+  set -e
+
+  if [[ $attempt_status -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ -n "$PUSH_TOKEN" ]] && grep -qE "Permission denied .*publickey|Authentication failed" "$attempt_output"; then
+    local https_url="https://x-access-token:${PUSH_TOKEN}@github.com/${OWNER_REPO}.git"
+    git -C "$PROJECT_ROOT" remote set-url "$REMOTE_NAME" "$https_url"
+
+    set +e
+    git -C "$PROJECT_ROOT" fetch "$REMOTE_NAME" --tags >>"$attempt_output" 2>&1
+    attempt_status=$?
+    set -e
+
+    if [[ $attempt_status -eq 0 ]]; then
+      restore_https_remote
+      return 0
+    fi
+  fi
+
+  echo "error: failed to fetch tags from ${REMOTE_NAME}." >&2
+  cat "$attempt_output" >&2
+  return 1
+}
+
 trap 'restore_remote_url' EXIT INT TERM
 
-git -C "$PROJECT_ROOT" fetch "$REMOTE_NAME" --tags
+fetch_with_auth_fallback
 CURRENT_BRANCH="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD)"
 if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
   CURRENT_BRANCH="$FALLBACK_BRANCH"
