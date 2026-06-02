@@ -178,6 +178,30 @@ remote_has_heads() {
   return 0
 }
 
+remote_has_heads_with_token_fallback() {
+  local remote_name=$1
+  local token
+
+  if remote_has_heads "$remote_name"; then
+    return 0
+  fi
+
+  if [[ "$BACKEND" == "github" ]]; then
+    token="${GITHUB_TOKEN:-${GH_TOKEN:-${GH_PAT:-${GITHUB_PAT:-}}}}"
+    if [[ -n "$token" ]]; then
+      local https_refs
+      local https_remote="https://x-access-token:${token}@github.com/${OWNER_REPO}.git"
+      if https_refs="$(git -C "$PROJECT_ROOT" ls-remote --heads "$https_remote" 2>/dev/null || true)"; then
+        if [[ -n "$(echo "$https_refs" | tr -d '[:space:]')" ]]; then
+          return 0
+        fi
+      fi
+    fi
+  fi
+
+  return 1
+}
+
 GITEA_HOST="${GITEA_HOST:-git.nlf.gg}"
 GITEA_API="${GITEA_API_URL:-https://${GITEA_HOST}/api/v1}"
 
@@ -238,7 +262,7 @@ if [[ $SKIP_PUBLISH -eq 0 ]]; then
   fi
 fi
 
-if ! remote_has_heads "$REMOTE_NAME"; then
+if ! remote_has_heads_with_token_fallback "$REMOTE_NAME"; then
   echo "error: remote '${REMOTE_NAME}' appears to have no branch refs after publish step." >&2
   echo "       Push a real branch on first run and then retry:" >&2
   echo "       git push ${REMOTE_NAME} ${FALLBACK_BRANCH}" >&2
