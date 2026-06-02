@@ -1,0 +1,25 @@
+.env
+.env.*
+dist/
+dist/*
+*.pyc
+__pycache__/
+custom_components/tallinn_widgets/__pycache__/
+
+# Python/tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Virtual environments
+.venv/
+venv/
+
+# Editors/OS temp files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*~
+*.swp

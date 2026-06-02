@@ -1,0 +1,2 @@
+"""Tallinn Widgets integration package."""
+

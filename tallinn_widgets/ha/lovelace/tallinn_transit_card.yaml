@@ -1,0 +1,27 @@
+type: markdown
+content: >
+  {% set payload = state_attr("sensor.tallinn_transit_board", "payload") | default({}) %}
+  {% set status = state_attr("sensor.tallinn_transit_board", "status") %}
+  {% set errors = state_attr("sensor.tallinn_transit_board", "errors") | default([]) %}
+  {% set departures = payload.get("departures", []) %}
+  {% if status == "error" %}
+  **Transit widget failed to refresh**  
+  {% for e in errors %}* {{ e }}<br>{% endfor %}
+  {% elif departures | count == 0 %}
+  No favorite departures found yet.
+  {% else %}
+  ### Tallinn Public Transit
+  {% for item in departures %}
+  #### {{ item.label }} ({{ item.route_filter }} / {{ item.headsign_filter }})  
+  | Route | Direction | In | Time |
+  | --- | --- | --- | --- |
+  {% if item.departures | count > 0 %}
+  {% for row in item.departures %}
+  | {{ row.route or '-' }} | {{ row.headsign or '-' }} | {{ row.in_minutes }} | {{ row.time or '-' }} |
+  {% endfor %}
+  {% else %}
+  | - | - | - | - |
+  {% endif %}
+
+  {% endfor %}
+  {% endif %}

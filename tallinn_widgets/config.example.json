@@ -1,0 +1,37 @@
+{
+  "transit": {
+    "gtfs_url": "https://eu-gtfs.remix.com/tallinn.zip",
+    "gtfs_cache_path": "/config/tallinn_widgets/.cache/gtfs_resolver.json",
+    "favorites": [
+      {
+        "label": "Laikmaa - Kopli",
+        "stop_name": "Laikmaa",
+        "route_short_name": "2",
+        "headsign": "Kopli",
+        "limit": 5
+      },
+      {
+        "label": "Kadriorg - Suur-Paala",
+        "stop_name": "Kadriorg",
+        "route_short_name": "3",
+        "headsign": "Suur-Paala",
+        "limit": 5
+      }
+    ],
+    "default_limit": 5
+  },
+  "trains": {
+    "trips": [
+      {
+        "trip_id": 568,
+        "label": "Paldiski - Tallinn",
+        "limit": 20
+      }
+    ],
+    "default_limit": 20
+  },
+  "http": {
+    "timeout_seconds": 20,
+    "user_agent": "HomeAssistant Tallin Widgets"
+  }
+}

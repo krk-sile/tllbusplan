@@ -1,0 +1,16 @@
+{
+  "domain": "tallinn_widgets",
+  "name": "Tallinn Widgets",
+  "documentation": "https://git.nlf.gg/siled/busplan",
+  "issue_tracker": "https://git.nlf.gg/siled/busplan/issues",
+  "codeowners": [
+    "@siled"
+  ],
+  "version": "1.2.7",
+  "requirements": [],
+  "dependencies": [],
+  "iot_class": "cloud_polling",
+  "loggers": [
+    "tallinn_widgets"
+  ]
+}

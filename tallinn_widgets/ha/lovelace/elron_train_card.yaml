@@ -1,0 +1,27 @@
+type: markdown
+content: >
+  {% set payload = state_attr("sensor.tallinn_elron_trips", "payload") | default({}) %}
+  {% set status = state_attr("sensor.tallinn_elron_trips", "status") %}
+  {% set errors = state_attr("sensor.tallinn_elron_trips", "errors") | default([]) %}
+  {% set trips = payload.get("trips", []) %}
+  {% if status == "error" %}
+  **Elron widget failed to refresh**  
+  {% for e in errors %}* {{ e }}<br>{% endfor %}
+  {% elif trips | count == 0 %}
+  No train trips configured yet.
+  {% else %}
+  ### Elron Departures
+  {% for trip in trips %}
+  #### {{ trip.label }} (ID {{ trip.trip_id }})
+  | Station | Planned | Actual | Delay |
+  | --- | --- | --- | --- |
+  {% if trip.stations | count > 0 %}
+  {% for row in trip.stations %}
+  | {{ row.station or '-' }} | {{ row.planned or '-' }} | {{ row.actual or '-' }} | {{ row.delay or '-' }} |
+  {% endfor %}
+  {% else %}
+  | - | - | - | - |
+  {% endif %}
+
+  {% endfor %}
+  {% endif %}

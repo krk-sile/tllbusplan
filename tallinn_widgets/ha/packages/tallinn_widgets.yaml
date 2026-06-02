@@ -1,0 +1,26 @@
+sensor:
+  - platform: command_line
+    name: Tallinn Transit Board
+    unique_id: tallinn_transit_board
+    scan_interval:
+      seconds: 45
+    command_timeout: 40
+    command: "python3 /config/tallinn_widgets/scripts/tallinn_transit_widget.py"
+    value_template: "{{ value_json.updated_at }}"
+    json_attributes:
+      - payload
+      - errors
+      - status
+
+  - platform: command_line
+    name: Tallinn Elron Trips
+    unique_id: tallinn_elron_trips
+    scan_interval:
+      seconds: 60
+    command_timeout: 40
+    command: "python3 /config/tallinn_widgets/scripts/tallinn_elron_widget.py"
+    value_template: "{{ value_json.updated_at }}"
+    json_attributes:
+      - payload
+      - errors
+      - status
