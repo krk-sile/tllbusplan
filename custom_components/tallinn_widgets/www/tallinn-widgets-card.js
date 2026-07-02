@@ -488,7 +488,7 @@ class TallinnWidgetsCard extends HTMLElement {
       <ha-card>
         <style>
           .tw-card {
-            padding: 16px;
+            padding: 20px;
           }
           .tw-title-row {
             align-items: baseline;
@@ -512,10 +512,11 @@ class TallinnWidgetsCard extends HTMLElement {
           }
           .tw-grid {
             display: grid;
-            gap: 16px;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 20px;
+            grid-template-columns: repeat(3, minmax(240px, 1fr));
           }
           .tw-section {
+            box-sizing: border-box;
             min-width: 0;
           }
           .tw-section + .tw-section {
@@ -641,13 +642,18 @@ class TallinnWidgetsCard extends HTMLElement {
           .tw-actions {
             display: grid;
             gap: 8px;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             margin: 8px 0;
+          }
+          .tw-actions button {
+            min-width: 0;
+            width: 100%;
           }
           .tw-primary {
             background: var(--primary-color);
             border-color: var(--primary-color);
             color: var(--text-primary-color, #fff);
+            grid-column: 1 / -1;
           }
           .tw-icon-button {
             align-items: center;
