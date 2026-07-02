@@ -49,6 +49,11 @@ def _int_query(request: web.Request, name: str, default: int, maximum: int) -> i
     return max(1, min(value, maximum))
 
 
+def _mode_query(request: web.Request) -> str:
+    mode = request.query.get("mode", "").strip().lower()
+    return mode if mode in {"bus", "tram"} else ""
+
+
 class TallinnTransitStationsView(HomeAssistantView):
     """Return public transit station search results."""
 
@@ -59,10 +64,11 @@ class TallinnTransitStationsView(HomeAssistantView):
         hass: HomeAssistant = request.app[KEY_HASS]
         query = request.query.get("q", "")
         limit = _int_query(request, "limit", 30, 100)
+        mode = _mode_query(request)
         try:
             config = await _async_widget_config(hass)
             payload = await hass.async_add_executor_job(
-                build_transit_station_list, config, query, limit
+                build_transit_station_list, config, query, limit, mode
             )
         except FileNotFoundError:
             return self.json_message("Tallinn Widgets config not found", HTTPStatus.NOT_FOUND)
@@ -82,6 +88,7 @@ class TallinnTransitDeparturesView(HomeAssistantView):
         station = request.query.get("station", "")
         window_minutes = _int_query(request, "window", 60, 180)
         limit = _int_query(request, "limit", 80, 200)
+        mode = _mode_query(request)
         try:
             config = await _async_widget_config(hass)
             payload = await hass.async_add_executor_job(
@@ -90,6 +97,7 @@ class TallinnTransitDeparturesView(HomeAssistantView):
                 station,
                 window_minutes,
                 limit,
+                mode,
             )
         except FileNotFoundError:
             return self.json_message("Tallinn Widgets config not found", HTTPStatus.NOT_FOUND)

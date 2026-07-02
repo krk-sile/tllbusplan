@@ -1,5 +1,6 @@
 type: custom:tallinn-widgets-card
 title: Transit Board
-transitTitle: Buses + Trams
+tramTitle: Trams
+busTitle: Buses
 trainTitle: Trains
 windowMinutes: 60

@@ -795,10 +795,13 @@ def _public_stop_modes(gtfs: GtfsCache) -> Dict[str, set[str]]:
 
 
 def build_transit_station_list(
-    config: Dict[str, Any], query: str = "", limit: int = 30
+    config: Dict[str, Any], query: str = "", limit: int = 30, mode: str = ""
 ) -> Dict[str, Any]:
     now = datetime.now().astimezone()
     normalized_query = normalize_text(query)
+    mode_filter = normalize_text(mode)
+    if mode_filter and mode_filter not in PUBLIC_TRANSIT_ROUTE_TYPES.values():
+        mode_filter = ""
     if not normalized_query:
         return {
             "status": "ok",
@@ -811,6 +814,8 @@ def build_transit_station_list(
     modes_by_stop = _public_stop_modes(gtfs)
     stations: Dict[str, Dict[str, Any]] = {}
     for stop_id, modes in modes_by_stop.items():
+        if mode_filter and mode_filter not in modes:
+            continue
         name = gtfs.stop_id_to_name.get(stop_id, "")
         normalized_name = gtfs.stop_id_to_norm_name.get(stop_id, "")
         if not name or normalized_query not in normalized_name:
@@ -854,9 +859,13 @@ def build_transit_station_departures(
     station: str,
     window_minutes: int = 60,
     limit: int = 80,
+    mode: str = "",
 ) -> Dict[str, Any]:
     now = datetime.now().astimezone()
     station_norm = normalize_text(station)
+    mode_filter = normalize_text(mode)
+    if mode_filter and mode_filter not in PUBLIC_TRANSIT_ROUTE_TYPES.values():
+        mode_filter = ""
     if not station_norm:
         return {
             "status": "error",
@@ -892,6 +901,8 @@ def build_transit_station_departures(
     for route_id, trip_ids in gtfs.trips_by_route.items():
         mode = PUBLIC_TRANSIT_ROUTE_TYPES.get(gtfs.route_id_to_type.get(route_id, ""))
         if not mode:
+            continue
+        if mode_filter and mode != mode_filter:
             continue
         route_short = gtfs.route_id_to_short.get(route_id, "")
         for trip_id in trip_ids:

@@ -10,19 +10,19 @@ class TallinnWidgetsCard extends HTMLElement {
   setConfig(config) {
     this._config = {
       title: "Transit Board",
+      tramTitle: "Trams",
+      busTitle: "Buses",
       transitTitle: "Buses + Trams",
       trainTitle: "Trains",
       windowMinutes: 60,
       ...config,
     };
-    this._state = this._state || {
-      transit: this._emptySection("transit"),
-      elron: this._emptySection("elron"),
-    };
+    this._state = this._state || this._initialState();
+    this._ensureSections();
     this._loadDefaults();
     if (this._hass && !this._initialized) {
       this._initialized = true;
-      this._refreshDefaults();
+      this._loadDefaultDepartures();
     }
     this._render();
   }
@@ -32,12 +32,25 @@ class TallinnWidgetsCard extends HTMLElement {
     if (this._state && !this._initialized) {
       this._initialized = true;
       this._loadDefaults();
-      this._refreshDefaults();
+      this._loadDefaultDepartures();
     }
   }
 
   getCardSize() {
-    return 6;
+    return 8;
+  }
+
+  _initialState() {
+    return Object.fromEntries(this._sectionConfigs().map((section) => [
+      section.kind,
+      this._emptySection(section.kind),
+    ]));
+  }
+
+  _ensureSections() {
+    for (const section of this._sectionConfigs()) {
+      this._state[section.kind] = this._state[section.kind] || this._emptySection(section.kind);
+    }
   }
 
   _emptySection(kind) {
@@ -54,7 +67,45 @@ class TallinnWidgetsCard extends HTMLElement {
       error: "",
       timer: null,
       requestId: 0,
+      searchOpen: false,
+      activeIndex: -1,
     };
+  }
+
+  _sectionConfigs() {
+    return [
+      {
+        kind: "tram",
+        apiKind: "transit",
+        mode: "tram",
+        title: this._config?.tramTitle || "Trams",
+        placeholder: "Search tram stop",
+        ariaLabel: "Tram stop",
+        icon: "mdi:tram",
+      },
+      {
+        kind: "bus",
+        apiKind: "transit",
+        mode: "bus",
+        title: this._config?.busTitle || "Buses",
+        placeholder: "Search bus stop",
+        ariaLabel: "Bus stop",
+        icon: "mdi:bus",
+      },
+      {
+        kind: "elron",
+        apiKind: "elron",
+        mode: "",
+        title: this._config?.trainTitle || "Trains",
+        placeholder: "Search train station",
+        ariaLabel: "Train station",
+        icon: "mdi:train",
+      },
+    ];
+  }
+
+  _sectionConfig(kind) {
+    return this._sectionConfigs().find((section) => section.kind === kind);
   }
 
   _storageKey(kind) {
@@ -89,20 +140,21 @@ class TallinnWidgetsCard extends HTMLElement {
     if (!this._state) {
       return;
     }
-    for (const kind of ["transit", "elron"]) {
-      const value = this._readLocalStorage(this._storageKey(kind));
-      this._state[kind].defaultStation = value;
-      if (!this._state[kind].selected) {
-        this._state[kind].selected = value;
-        this._state[kind].query = value;
+    for (const sectionConfig of this._sectionConfigs()) {
+      const section = this._state[sectionConfig.kind];
+      const value = this._readLocalStorage(this._storageKey(sectionConfig.kind));
+      section.defaultStation = value;
+      if (!section.selected) {
+        section.selected = value;
+        section.query = value;
       }
     }
   }
 
-  async _refreshDefaults() {
-    for (const kind of ["transit", "elron"]) {
-      if (this._state[kind].selected) {
-        await this._loadDepartures(kind);
+  async _loadDefaultDepartures() {
+    for (const sectionConfig of this._sectionConfigs()) {
+      if (this._state[sectionConfig.kind].selected) {
+        await this._loadDepartures(sectionConfig.kind);
       }
     }
   }
@@ -114,11 +166,30 @@ class TallinnWidgetsCard extends HTMLElement {
     return this._hass.callApi("GET", path);
   }
 
+  _apiPath(kind, resource, params = {}) {
+    const sectionConfig = this._sectionConfig(kind);
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== "") {
+        search.set(key, String(value));
+      }
+    }
+    if (sectionConfig.mode) {
+      search.set("mode", sectionConfig.mode);
+    }
+    const suffix = search.toString();
+    return `tallinn_widgets/${sectionConfig.apiKind}/${resource}${suffix ? `?${suffix}` : ""}`;
+  }
+
   _debouncedStationSearch(kind, query) {
     const section = this._state[kind];
     section.query = query;
     section.selected = query;
     section.error = "";
+    section.searchOpen = true;
+    section.activeIndex = -1;
+    this._syncPickerControls(kind);
+    this._updateSearchStatus(kind);
     window.clearTimeout(section.timer);
     section.timer = window.setTimeout(() => this._loadStations(kind, query), 250);
   }
@@ -126,63 +197,40 @@ class TallinnWidgetsCard extends HTMLElement {
   async _loadStations(kind, query) {
     const section = this._state[kind];
     const trimmed = query.trim();
-    if (!trimmed && kind === "transit") {
+    section.requestId += 1;
+    const requestId = section.requestId;
+
+    if (trimmed.length < 2) {
+      section.loadingStations = false;
       section.stations = [];
-      this._updateStationOptions(kind);
-      return;
-    }
-    if (kind === "transit" && trimmed.length < 2) {
-      section.stations = [];
-      this._updateStationOptions(kind);
+      section.searchOpen = Boolean(trimmed);
+      this._updateSearchStatus(kind);
+      this._updateStationResults(kind);
       return;
     }
 
     section.loadingStations = true;
-    section.requestId += 1;
-    const requestId = section.requestId;
-    this._renderAfterStationSearch(kind);
+    this._updateSearchStatus(kind);
     try {
-      const path = `tallinn_widgets/${kind}/stations?q=${encodeURIComponent(
-        trimmed
-      )}&limit=50`;
+      const path = this._apiPath(kind, "stations", {q: trimmed, limit: 50});
       const payload = await this._callApi(path);
       if (requestId === section.requestId) {
         section.stations = payload.stations || [];
         section.error = "";
+        section.searchOpen = true;
       }
     } catch (err) {
       if (requestId === section.requestId) {
         section.error = err.message || String(err);
+        section.stations = [];
+        section.searchOpen = true;
       }
     } finally {
       if (requestId === section.requestId) {
         section.loadingStations = false;
       }
-      this._renderAfterStationSearch(kind);
-    }
-  }
-
-  _renderAfterStationSearch(kind) {
-    if (this._stationInputFocused(kind)) {
-      this._updateStationOptions(kind);
-      return;
-    }
-    this._render();
-  }
-
-  _stationInputFocused(kind) {
-    const active = document.activeElement;
-    return (
-      active instanceof HTMLElement &&
-      this.contains(active) &&
-      active.dataset.stationInput === kind
-    );
-  }
-
-  _updateStationOptions(kind) {
-    const list = this.querySelector(`#${this._instanceId}-${kind}-stations`);
-    if (list) {
-      list.innerHTML = this._stationOptions(kind);
+      this._updateSearchStatus(kind);
+      this._updateStationResults(kind);
     }
   }
 
@@ -193,17 +241,21 @@ class TallinnWidgetsCard extends HTMLElement {
       section.payload = null;
       section.updatedAt = "";
       section.error = "";
+      section.searchOpen = false;
       this._render();
       return;
     }
 
     section.loadingDepartures = true;
+    section.searchOpen = false;
     this._render();
     try {
       const windowMinutes = Number(this._config.windowMinutes) || 60;
-      const path = `tallinn_widgets/${kind}/departures?station=${encodeURIComponent(
-        station
-      )}&window=${windowMinutes}&limit=80`;
+      const path = this._apiPath(kind, "departures", {
+        station,
+        window: windowMinutes,
+        limit: 80,
+      });
       const payload = await this._callApi(path);
       section.payload = payload.payload || null;
       section.updatedAt = payload.updated_at || "";
@@ -216,6 +268,21 @@ class TallinnWidgetsCard extends HTMLElement {
       section.loadingDepartures = false;
       this._render();
     }
+  }
+
+  _selectStation(kind, station) {
+    const section = this._state[kind];
+    section.selected = station;
+    section.query = station;
+    section.searchOpen = false;
+    section.activeIndex = -1;
+    const input = this.querySelector(`[data-station-input="${kind}"]`);
+    if (input) {
+      input.value = station;
+    }
+    this._updateStationResults(kind);
+    this._syncPickerControls(kind);
+    this._loadDepartures(kind);
   }
 
   _saveDefault(kind) {
@@ -234,59 +301,132 @@ class TallinnWidgetsCard extends HTMLElement {
     this._render();
   }
 
-  _stationOptions(kind) {
-    return (this._state[kind].stations || [])
-      .map((station) => {
-        const label = station.modes ? station.modes.join(", ") : station.message || "";
-        return `<option value="${this._escape(station.name)}" label="${this._escape(
-          label
-        )}"></option>`;
-      })
-      .join("");
+  _moveActiveResult(kind, delta) {
+    const section = this._state[kind];
+    const count = section.stations.length;
+    if (!count) {
+      return;
+    }
+    section.searchOpen = true;
+    section.activeIndex = (section.activeIndex + delta + count) % count;
+    this._updateStationResults(kind);
+  }
+
+  _syncPickerControls(kind) {
+    const section = this._state[kind];
+    const saveButton = this.querySelector(`[data-save-default="${kind}"]`);
+    if (saveButton) {
+      saveButton.disabled = !section.selected.trim();
+    }
+  }
+
+  _updateSearchStatus(kind) {
+    const section = this._state[kind];
+    const status = this.querySelector(`[data-search-status="${kind}"]`);
+    if (!status) {
+      return;
+    }
+    if (section.loadingStations) {
+      status.textContent = "Searching...";
+    } else if (section.error && section.searchOpen) {
+      status.textContent = section.error;
+    } else {
+      status.textContent = "";
+    }
+  }
+
+  _updateStationResults(kind) {
+    const container = this.querySelector(`[data-results="${kind}"]`);
+    if (!container) {
+      return;
+    }
+    container.innerHTML = this._stationResults(kind);
+    this._bindResultEvents(kind);
+  }
+
+  _stationResults(kind) {
+    const section = this._state[kind];
+    const query = section.query.trim();
+    if (!section.searchOpen || query.length < 2) {
+      return "";
+    }
+    if (!section.loadingStations && !section.stations.length && !section.error) {
+      return `<div class="tw-result-empty">No matches</div>`;
+    }
+    if (!section.stations.length) {
+      return "";
+    }
+    return `
+      <div class="tw-results-list" role="listbox">
+        ${section.stations
+          .map((station, index) => this._stationResult(kind, station, index))
+          .join("")}
+      </div>
+    `;
+  }
+
+  _stationResult(kind, station, index) {
+    const section = this._state[kind];
+    const active = index === section.activeIndex;
+    const meta = station.modes ? station.modes.join(", ") : station.message || "";
+    return `
+      <button
+        class="tw-result ${active ? "is-active" : ""}"
+        data-result-kind="${this._escape(kind)}"
+        data-result-station="${this._escape(station.name)}"
+        role="option"
+        aria-selected="${active ? "true" : "false"}"
+        type="button"
+      >
+        <span>${this._escape(station.name)}</span>
+        ${meta ? `<small>${this._escape(meta)}</small>` : ""}
+      </button>
+    `;
   }
 
   _section(kind, title) {
     const section = this._state[kind];
+    const sectionConfig = this._sectionConfig(kind);
     const selected = this._escape(section.selected);
-    const listId = `${this._instanceId}-${kind}-stations`;
-    const isTransit = kind === "transit";
-    const placeholder = isTransit ? "Search stop" : "Search station";
     const defaultText = section.defaultStation
       ? `<span class="tw-default">Default: ${this._escape(section.defaultStation)}</span>`
       : "";
 
     return `
-      <section class="tw-section">
+      <section class="tw-section" data-section="${this._escape(kind)}">
         <div class="tw-section-header">
-          <div>
-            <h3>${this._escape(title)}</h3>
-            <div class="tw-subtitle">Next ${Number(this._config.windowMinutes) || 60} minutes</div>
+          <div class="tw-heading">
+            <ha-icon icon="${this._escape(sectionConfig.icon)}"></ha-icon>
+            <div>
+              <h3>${this._escape(title)}</h3>
+              <div class="tw-subtitle">Next ${Number(this._config.windowMinutes) || 60} minutes</div>
+            </div>
           </div>
-          <button class="tw-icon-button" data-refresh="${kind}" title="Refresh" aria-label="Refresh ${
-            isTransit ? "public transit" : "train"
-          } departures">
+          <button class="tw-icon-button" data-refresh="${kind}" title="Refresh" aria-label="Refresh ${this._escape(title)} departures">
             <ha-icon icon="mdi:refresh"></ha-icon>
           </button>
         </div>
-        <div class="tw-controls">
+        <div class="tw-picker">
           <input
             class="tw-input"
-            list="${listId}"
             data-station-input="${kind}"
-            aria-label="${isTransit ? "Public transit stop" : "Train station"}"
-            placeholder="${placeholder}"
+            aria-label="${this._escape(sectionConfig.ariaLabel)}"
+            placeholder="${this._escape(sectionConfig.placeholder)}"
             value="${selected}"
             autocomplete="off"
+            spellcheck="false"
           />
-          <datalist id="${listId}">${this._stationOptions(kind)}</datalist>
+          <div class="tw-search-status" data-search-status="${kind}"></div>
+          <div class="tw-results" data-results="${kind}">${this._stationResults(kind)}</div>
+        </div>
+        <div class="tw-actions">
           <button class="tw-primary" data-load="${kind}">Show</button>
           <button data-save-default="${kind}" ${selected ? "" : "disabled"}>Set default</button>
           <button data-clear-default="${kind}" ${section.defaultStation ? "" : "disabled"}>Clear</button>
         </div>
         ${defaultText}
-        ${section.loadingStations ? `<div class="tw-muted">Searching...</div>` : ""}
         ${section.loadingDepartures ? `<div class="tw-muted">Loading...</div>` : ""}
-        ${section.error ? `<div class="tw-error">${this._escape(section.error)}</div>` : ""}
+        ${section.error && !section.searchOpen ? `<div class="tw-error">${this._escape(section.error)}</div>` : ""}
         ${this._departures(kind)}
       </section>
     `;
@@ -308,14 +448,7 @@ class TallinnWidgetsCard extends HTMLElement {
 
     const isTrain = kind === "elron";
     return `
-      <div class="tw-list" role="table" aria-label="${this._escape(payload.station)} departures">
-        <div class="tw-list-head" role="row">
-          <span>Due</span>
-          <span>Time</span>
-          <span>${isTrain ? "Train" : "Line"}</span>
-          <span>To</span>
-          <span>${isTrain ? "Track" : "Stop"}</span>
-        </div>
+      <div class="tw-list" aria-label="${this._escape(payload.station)} departures">
         ${rows.map((row) => this._departureRow(row, isTrain)).join("")}
       </div>
       <div class="tw-source">
@@ -327,18 +460,20 @@ class TallinnWidgetsCard extends HTMLElement {
 
   _departureRow(row, isTrain) {
     const line = isTrain ? row.trip || row.line || "-" : row.route || "-";
-    const mode = isTrain ? row.platform || "-" : row.mode || "-";
-    const detail = isTrain ? row.line || "" : row.stop_code || "";
+    const meta = isTrain ? row.line || "" : row.stop_code || "";
+    const platform = isTrain ? row.platform || "" : "";
     return `
-      <div class="tw-row" role="row">
-        <span class="tw-due" role="cell">${this._escape(row.due || "-")}</span>
-        <span class="tw-time" role="cell">${this._escape(row.time || "-")}</span>
-        <span class="tw-service" role="cell">
+      <div class="tw-row">
+        <div class="tw-row-top">
+          <span class="tw-due">${this._escape(row.due || "-")}</span>
           <span class="tw-route">${this._escape(line)}</span>
-          ${detail ? `<span class="tw-detail">${this._escape(detail)}</span>` : ""}
-        </span>
-        <span class="tw-destination" role="cell">${this._escape(row.direction || "-")}</span>
-        <span class="tw-mode" role="cell">${this._escape(mode)}</span>
+          <span class="tw-time">${this._escape(row.time || "-")}</span>
+        </div>
+        <div class="tw-destination">${this._escape(row.direction || "-")}</div>
+        <div class="tw-detail-line">
+          ${meta ? `<span>${this._escape(meta)}</span>` : ""}
+          ${platform ? `<span>Track ${this._escape(platform)}</span>` : ""}
+        </div>
       </div>
     `;
   }
@@ -377,21 +512,32 @@ class TallinnWidgetsCard extends HTMLElement {
           }
           .tw-grid {
             display: grid;
-            gap: 18px;
+            gap: 16px;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
           }
           .tw-section {
-            border-top: 1px solid var(--divider-color);
-            padding-top: 16px;
+            min-width: 0;
           }
-          .tw-section:first-of-type {
-            border-top: 0;
-            padding-top: 0;
+          .tw-section + .tw-section {
+            border-left: 1px solid var(--divider-color);
+            padding-left: 16px;
           }
           .tw-section-header {
             align-items: center;
             display: flex;
             gap: 12px;
             justify-content: space-between;
+          }
+          .tw-heading {
+            align-items: center;
+            display: flex;
+            gap: 8px;
+            min-width: 0;
+          }
+          .tw-heading ha-icon {
+            --mdc-icon-size: 20px;
+            color: var(--secondary-text-color);
+            flex: 0 0 auto;
           }
           h3 {
             color: var(--primary-text-color);
@@ -405,16 +551,16 @@ class TallinnWidgetsCard extends HTMLElement {
           .tw-muted,
           .tw-empty,
           .tw-source,
-          .tw-detail {
+          .tw-detail-line,
+          .tw-search-status,
+          .tw-result-empty {
             color: var(--secondary-text-color);
             font-size: 12px;
             line-height: 1.4;
           }
-          .tw-controls {
-            display: grid;
-            gap: 8px;
-            grid-template-columns: minmax(180px, 1fr) auto auto auto;
-            margin: 12px 0 8px;
+          .tw-picker {
+            margin-top: 12px;
+            position: relative;
           }
           .tw-input,
           button {
@@ -445,6 +591,59 @@ class TallinnWidgetsCard extends HTMLElement {
             outline: 2px solid var(--primary-color);
             outline-offset: 2px;
           }
+          .tw-search-status {
+            min-height: 17px;
+            padding-top: 4px;
+          }
+          .tw-results {
+            left: 0;
+            position: absolute;
+            right: 0;
+            top: 40px;
+            z-index: 5;
+          }
+          .tw-results-list,
+          .tw-result-empty {
+            background: var(--card-background-color);
+            border: 1px solid var(--divider-color);
+            border-radius: 6px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.18);
+            max-height: 220px;
+            overflow: auto;
+          }
+          .tw-result-empty {
+            padding: 10px;
+          }
+          .tw-result {
+            align-items: flex-start;
+            border: 0;
+            border-bottom: 1px solid var(--divider-color);
+            border-radius: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-height: 42px;
+            padding: 7px 10px;
+            text-align: left;
+            width: 100%;
+          }
+          .tw-result:last-child {
+            border-bottom: 0;
+          }
+          .tw-result.is-active,
+          .tw-result:hover {
+            background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+          }
+          .tw-result small {
+            color: var(--secondary-text-color);
+            font-size: 11px;
+          }
+          .tw-actions {
+            display: grid;
+            gap: 8px;
+            grid-template-columns: 1fr 1fr 1fr;
+            margin: 8px 0;
+          }
           .tw-primary {
             background: var(--primary-color);
             border-color: var(--primary-color);
@@ -453,6 +652,7 @@ class TallinnWidgetsCard extends HTMLElement {
           .tw-icon-button {
             align-items: center;
             display: inline-flex;
+            flex: 0 0 auto;
             justify-content: center;
             padding: 0;
             width: 36px;
@@ -475,25 +675,18 @@ class TallinnWidgetsCard extends HTMLElement {
             display: grid;
             margin-top: 12px;
           }
-          .tw-list-head,
           .tw-row {
+            border-bottom: 1px solid var(--divider-color);
+            display: grid;
+            gap: 4px;
+            min-height: 56px;
+            padding: 8px 0;
+          }
+          .tw-row-top {
             align-items: center;
             display: grid;
-            gap: 8px;
-            grid-template-columns: minmax(44px, 0.55fr) minmax(48px, 0.6fr) minmax(58px, 0.8fr) minmax(120px, 1.4fr) minmax(48px, 0.65fr);
-          }
-          .tw-list-head {
-            border-bottom: 1px solid var(--divider-color);
-            color: var(--secondary-text-color);
-            font-size: 11px;
-            font-weight: 600;
-            padding: 0 0 6px;
-            text-transform: uppercase;
-          }
-          .tw-row {
-            border-bottom: 1px solid var(--divider-color);
-            min-height: 44px;
-            padding: 7px 0;
+            gap: 6px;
+            grid-template-columns: minmax(44px, auto) minmax(32px, auto) 1fr;
           }
           .tw-due {
             color: var(--primary-text-color);
@@ -501,17 +694,11 @@ class TallinnWidgetsCard extends HTMLElement {
             font-weight: 700;
             white-space: nowrap;
           }
-          .tw-time,
-          .tw-mode {
+          .tw-time {
             color: var(--primary-text-color);
             font-size: 13px;
+            text-align: right;
             white-space: nowrap;
-          }
-          .tw-service {
-            align-items: center;
-            display: flex;
-            gap: 6px;
-            min-width: 0;
           }
           .tw-route {
             background: color-mix(in srgb, var(--primary-color) 14%, transparent);
@@ -534,41 +721,34 @@ class TallinnWidgetsCard extends HTMLElement {
             text-overflow: ellipsis;
             white-space: nowrap;
           }
+          .tw-detail-line,
           .tw-source {
             display: flex;
             gap: 8px;
             justify-content: space-between;
+          }
+          .tw-source {
             margin-top: 8px;
           }
-          @media (max-width: 720px) {
+          @media (max-width: 1100px) {
+            .tw-grid {
+              grid-template-columns: 1fr;
+            }
+            .tw-section + .tw-section {
+              border-left: 0;
+              border-top: 1px solid var(--divider-color);
+              padding-left: 0;
+              padding-top: 16px;
+            }
+          }
+          @media (max-width: 560px) {
             .tw-title-row {
               align-items: flex-start;
               flex-direction: column;
               gap: 2px;
             }
-            .tw-controls {
-              grid-template-columns: 1fr 1fr 1fr;
-            }
-            .tw-input {
-              grid-column: 1 / -1;
-            }
-            .tw-list-head {
-              display: none;
-            }
-            .tw-row {
-              gap: 4px 8px;
-              grid-template-columns: minmax(48px, auto) minmax(54px, auto) 1fr;
-            }
-            .tw-service {
-              justify-content: flex-end;
-            }
-            .tw-destination {
-              grid-column: 1 / -1;
-              white-space: normal;
-            }
-            .tw-mode {
-              color: var(--secondary-text-color);
-              grid-column: 1 / -1;
+            .tw-actions {
+              grid-template-columns: 1fr;
             }
           }
         </style>
@@ -578,7 +758,8 @@ class TallinnWidgetsCard extends HTMLElement {
             <span class="tw-window">${Number(this._config.windowMinutes) || 60} min</span>
           </div>
           <div class="tw-grid">
-            ${this._section("transit", this._config.transitTitle)}
+            ${this._section("tram", this._config.tramTitle)}
+            ${this._section("bus", this._config.busTitle)}
             ${this._section("elron", this._config.trainTitle)}
           </div>
         </div>
@@ -593,18 +774,28 @@ class TallinnWidgetsCard extends HTMLElement {
       input.addEventListener("input", (event) =>
         this._debouncedStationSearch(input.dataset.stationInput, event.target.value)
       );
-      input.addEventListener("change", (event) => {
-        this._state[input.dataset.stationInput].selected = event.target.value;
-        this._loadDepartures(input.dataset.stationInput);
-      });
       input.addEventListener("keypress", (event) => event.stopPropagation(), true);
       input.addEventListener("keyup", (event) => event.stopPropagation(), true);
       input.addEventListener("keydown", (event) => {
         event.stopPropagation();
+        const kind = input.dataset.stationInput;
         if (event.key === "Enter") {
           event.preventDefault();
-          this._state[input.dataset.stationInput].selected = event.target.value;
-          this._loadDepartures(input.dataset.stationInput);
+          const section = this._state[kind];
+          const station = section.activeIndex >= 0 && section.stations[section.activeIndex]
+            ? section.stations[section.activeIndex].name
+            : event.target.value;
+          this._selectStation(kind, station);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          this._moveActiveResult(kind, 1);
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          this._moveActiveResult(kind, -1);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          this._state[kind].searchOpen = false;
+          this._updateStationResults(kind);
         }
       }, true);
     });
@@ -620,6 +811,18 @@ class TallinnWidgetsCard extends HTMLElement {
     this.querySelectorAll("[data-clear-default]").forEach((button) =>
       button.addEventListener("click", () => this._clearDefault(button.dataset.clearDefault))
     );
+    for (const sectionConfig of this._sectionConfigs()) {
+      this._bindResultEvents(sectionConfig.kind);
+    }
+  }
+
+  _bindResultEvents(kind) {
+    this.querySelectorAll(`[data-result-kind="${kind}"]`).forEach((button) => {
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", () =>
+        this._selectStation(kind, button.dataset.resultStation || "")
+      );
+    });
   }
 
   _captureFocus() {

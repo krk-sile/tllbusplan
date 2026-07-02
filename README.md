@@ -5,7 +5,7 @@ widgets:
 
 1. Tallinn public transit departures for configured favorite stops/routes.
 2. Elron trip departure tables for configured train trip IDs.
-3. A selectable station board for Tallinn buses/trams and Elron trains.
+3. A three-column station board for Tallinn trams, Tallinn buses, and Elron trains.
 
 This GitHub repository is the curated public HACS distribution snapshot. The
 working source repository lives in Gitea; only release-ready files are published
