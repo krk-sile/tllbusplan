@@ -34,7 +34,6 @@ class TallinnWidgetsCard extends HTMLElement {
       this._loadDefaults();
       this._refreshDefaults();
     }
-    this._render();
   }
 
   getCardSize() {
@@ -569,12 +568,6 @@ class TallinnWidgetsCard extends HTMLElement {
 
   _bindEvents() {
     this.querySelectorAll("[data-station-input]").forEach((input) => {
-      input.addEventListener("focus", () => {
-        if (this._restoringFocus) {
-          return;
-        }
-        this._loadStations(input.dataset.stationInput, input.value);
-      });
       input.addEventListener("input", (event) =>
         this._debouncedStationSearch(input.dataset.stationInput, event.target.value)
       );
