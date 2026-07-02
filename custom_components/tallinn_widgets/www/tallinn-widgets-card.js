@@ -569,9 +569,12 @@ class TallinnWidgetsCard extends HTMLElement {
 
   _bindEvents() {
     this.querySelectorAll("[data-station-input]").forEach((input) => {
-      input.addEventListener("focus", () =>
-        this._loadStations(input.dataset.stationInput, input.value)
-      );
+      input.addEventListener("focus", () => {
+        if (this._restoringFocus) {
+          return;
+        }
+        this._loadStations(input.dataset.stationInput, input.value);
+      });
       input.addEventListener("input", (event) =>
         this._debouncedStationSearch(input.dataset.stationInput, event.target.value)
       );
@@ -620,11 +623,14 @@ class TallinnWidgetsCard extends HTMLElement {
     if (!input) {
       return;
     }
-    input.focus();
+    this._restoringFocus = true;
     try {
+      input.focus();
       input.setSelectionRange(focus.start, focus.end);
     } catch (_err) {
       // Some input implementations do not support selection ranges.
+    } finally {
+      this._restoringFocus = false;
     }
   }
 
