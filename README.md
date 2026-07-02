@@ -29,6 +29,9 @@ Create `/config/tallinn_widgets/config.json` from:
 tallinn_widgets/config.example.json
 ```
 
+If the file is not present yet and the integration is still using the default
+config path, Tallinn Widgets falls back to its bundled example config.
+
 Edit:
 
 - `transit.favorites` for Tallinn public transport favorites.

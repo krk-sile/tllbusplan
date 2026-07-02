@@ -63,11 +63,13 @@ def _config_path(configured: str) -> Path:
     if explicit.exists():
         return explicit
 
+    default_path = Path(DEFAULT_CONFIG_PATH)
     candidates = [
-        Path("/config/tallinn_widgets/config.json"),
+        default_path,
         Path("/config/tallinn_widgets/config.example.json"),
-        explicit,
     ]
+    if explicit == default_path:
+        candidates.append(Path(__file__).with_name("config.example.json"))
 
     for candidate in candidates:
         if candidate.exists():
