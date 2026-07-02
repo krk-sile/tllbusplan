@@ -4,17 +4,17 @@
     "gtfs_cache_path": "/config/tallinn_widgets/.cache/gtfs_resolver.json",
     "favorites": [
       {
-        "label": "Laikmaa - Kopli",
-        "stop_name": "Laikmaa",
-        "route_short_name": "2",
-        "headsign": "Kopli",
+        "label": "Kadriorg - Tondi",
+        "stop_name": "Kadriorg",
+        "route_short_name": "3",
+        "headsign": "Tondi",
         "limit": 5
       },
       {
-        "label": "Kadriorg - Suur-Paala",
+        "label": "Kadriorg - Kopli",
         "stop_name": "Kadriorg",
-        "route_short_name": "3",
-        "headsign": "Suur-Paala",
+        "route_short_name": "1",
+        "headsign": "Kopli",
         "limit": 5
       }
     ],
@@ -32,6 +32,6 @@
   },
   "http": {
     "timeout_seconds": 20,
-    "user_agent": "HomeAssistant Tallin Widgets"
+    "user_agent": "HomeAssistant Tallinn Widgets"
   }
 }

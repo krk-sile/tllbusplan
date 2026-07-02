@@ -3,34 +3,36 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
 
 import voluptuous as vol
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.util import dt as dt_util
 
 from homeassistant.helpers import config_validation as cv
 
+from .const import (
+    CONF_CONFIG_PATH,
+    CONF_ELRON_NAME,
+    CONF_ELRON_SCAN_INTERVAL,
+    CONF_TRANSIT_NAME,
+    CONF_TRANSIT_SCAN_INTERVAL,
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_ELRON_NAME,
+    DEFAULT_ELRON_SCAN_SECONDS,
+    DEFAULT_TRANSIT_NAME,
+    DEFAULT_TRANSIT_SCAN_SECONDS,
+    DOMAIN,
+)
 from .tallinn_widget_lib import build_elron_payload, build_transit_payload, read_json_file
 
 _LOGGER = logging.getLogger(__name__)
-
-CONF_CONFIG_PATH = "config_path"
-CONF_ELRON_NAME = "elron_sensor_name"
-CONF_TRANSIT_NAME = "transit_sensor_name"
-CONF_ELRON_SCAN_INTERVAL = "elron_scan_interval"
-CONF_TRANSIT_SCAN_INTERVAL = "transit_scan_interval"
-
-DEFAULT_CONFIG_PATH = "/config/tallinn_widgets/config.json"
-DEFAULT_TRANSIT_NAME = "Tallinn Transit Board"
-DEFAULT_ELRON_NAME = "Tallinn Elron Trips"
-DEFAULT_TRANSIT_SCAN_SECONDS = 45
-DEFAULT_ELRON_SCAN_SECONDS = 60
 
 PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
     {
@@ -50,7 +52,7 @@ PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
 def _resolve_payload_error(error: str) -> Dict[str, Any]:
     return {
         "status": "error",
-        "updated_at": dt_util.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "errors": [error],
         "payload": {},
     }
@@ -80,7 +82,11 @@ def _load_transit_payload(path: Path) -> Dict[str, Any]:
         conf = read_json_file(path)
     except Exception as exc:
         return _resolve_payload_error(f"Failed reading config {path}: {exc}")
-    return build_transit_payload(conf)
+    try:
+        return build_transit_payload(conf)
+    except Exception as exc:
+        _LOGGER.debug("Failed building Tallinn transit payload", exc_info=True)
+        return _resolve_payload_error(f"Failed building transit payload: {exc}")
 
 
 def _load_elron_payload(path: Path) -> Dict[str, Any]:
@@ -90,20 +96,38 @@ def _load_elron_payload(path: Path) -> Dict[str, Any]:
         conf = read_json_file(path)
     except Exception as exc:
         return _resolve_payload_error(f"Failed reading config {path}: {exc}")
-    return build_elron_payload(conf)
+    try:
+        return build_elron_payload(conf)
+    except Exception as exc:
+        _LOGGER.debug("Failed building Tallinn Elron payload", exc_info=True)
+        return _resolve_payload_error(f"Failed building Elron payload: {exc}")
 
 
-async def async_setup_platform(hass, config: ConfigType, async_add_entities: AddEntitiesCallback, discovery_info=None):
+async def _async_add_tallinn_entities(
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     config_path = _config_path(config.get(CONF_CONFIG_PATH, DEFAULT_CONFIG_PATH))
-    transit_interval = timedelta(seconds=config.get(CONF_TRANSIT_SCAN_INTERVAL, DEFAULT_TRANSIT_SCAN_SECONDS))
-    elron_interval = timedelta(seconds=config.get(CONF_ELRON_SCAN_INTERVAL, DEFAULT_ELRON_SCAN_SECONDS))
+    transit_interval = timedelta(
+        seconds=config.get(CONF_TRANSIT_SCAN_INTERVAL, DEFAULT_TRANSIT_SCAN_SECONDS)
+    )
+    elron_interval = timedelta(
+        seconds=config.get(CONF_ELRON_SCAN_INTERVAL, DEFAULT_ELRON_SCAN_SECONDS)
+    )
+
+    async def _async_load_transit_payload() -> Dict[str, Any]:
+        return await hass.async_add_executor_job(_load_transit_payload, config_path)
+
+    async def _async_load_elron_payload() -> Dict[str, Any]:
+        return await hass.async_add_executor_job(_load_elron_payload, config_path)
 
     transit_coordinator = DataUpdateCoordinator(
         hass,
         logger=_LOGGER,
         name="Tallinn Transit Widget",
         update_interval=transit_interval,
-        update_method=lambda: hass.async_add_executor_job(_load_transit_payload, config_path),
+        update_method=_async_load_transit_payload,
     )
 
     elron_coordinator = DataUpdateCoordinator(
@@ -111,7 +135,7 @@ async def async_setup_platform(hass, config: ConfigType, async_add_entities: Add
         logger=_LOGGER,
         name="Tallinn Elron Widget",
         update_interval=elron_interval,
-        update_method=lambda: hass.async_add_executor_job(_load_elron_payload, config_path),
+        update_method=_async_load_elron_payload,
     )
 
     await transit_coordinator.async_config_entry_first_refresh()
@@ -134,6 +158,27 @@ async def async_setup_platform(hass, config: ConfigType, async_add_entities: Add
     )
 
 
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Tallinn Widgets sensors from a config entry."""
+    config = dict(entry.data)
+    config.update(entry.options)
+    await _async_add_tallinn_entities(hass, config, async_add_entities)
+
+
+async def async_setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info=None,
+) -> None:
+    """Set up Tallinn Widgets sensors from legacy YAML."""
+    await _async_add_tallinn_entities(hass, config, async_add_entities)
+
+
 class _TallinnSensorEntity(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
 
@@ -141,7 +186,7 @@ class _TallinnSensorEntity(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._kind = kind
         self._attr_name = name
-        self._attr_unique_id = f"tallinn_widgets_{kind}"
+        self._attr_unique_id = f"{DOMAIN}_{kind}"
 
     @property
     def native_value(self) -> str | None:

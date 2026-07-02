@@ -1,14 +1,16 @@
 {
   "domain": "tallinn_widgets",
   "name": "Tallinn Widgets",
-  "documentation": "https://git.nlf.gg/siled/busplan",
-  "issue_tracker": "https://git.nlf.gg/siled/busplan/issues",
+  "documentation": "https://github.com/krk-sile/tllbusplan",
+  "issue_tracker": "https://github.com/krk-sile/tllbusplan/issues",
   "codeowners": [
-    "@siled"
+    "@krk-sile"
   ],
-  "version": "1.2.7",
+  "version": "1.2.8",
+  "config_flow": true,
   "requirements": [],
   "dependencies": [],
+  "integration_type": "service",
   "iot_class": "cloud_polling",
   "loggers": [
     "tallinn_widgets"

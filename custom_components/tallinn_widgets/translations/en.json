@@ -1,0 +1,36 @@
+{
+  "title": "Tallinn Widgets",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tallinn Widgets",
+        "description": "Configure the local Tallinn Widgets JSON file and polling intervals.",
+        "data": {
+          "config_path": "Config path",
+          "transit_sensor_name": "Transit sensor name",
+          "elron_sensor_name": "Elron sensor name",
+          "transit_scan_interval": "Transit scan interval in seconds",
+          "elron_scan_interval": "Elron scan interval in seconds"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Tallinn Widgets is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tallinn Widgets options",
+        "description": "Update the local config path, sensor names, or polling intervals.",
+        "data": {
+          "config_path": "Config path",
+          "transit_sensor_name": "Transit sensor name",
+          "elron_sensor_name": "Elron sensor name",
+          "transit_scan_interval": "Transit scan interval in seconds",
+          "elron_scan_interval": "Elron scan interval in seconds"
+        }
+      }
+    }
+  }
+}

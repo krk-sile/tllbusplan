@@ -153,6 +153,88 @@ def minutes_until(target: datetime, now: datetime) -> int:
     return max(0, int((target - now).total_seconds() // 60))
 
 
+def parse_int(value: Any) -> Optional[int]:
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def seconds_since_midnight_to_datetime(value: Any, now: datetime) -> Optional[datetime]:
+    seconds = parse_int(value)
+    if seconds is None or seconds < 0:
+        return None
+
+    local_now = now.astimezone()
+    midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    departure = midnight + timedelta(seconds=seconds)
+    if departure < local_now - timedelta(hours=1):
+        departure += timedelta(days=1)
+    return departure
+
+
+def seconds_since_midnight_to_text(value: Any) -> str:
+    seconds = parse_int(value)
+    if seconds is None or seconds < 0:
+        return str(value) if value is not None else ""
+
+    seconds %= 24 * 60 * 60
+    hour = seconds // 3600
+    minute = (seconds % 3600) // 60
+    return f"{hour:02d}:{minute:02d}"
+
+
+def parse_tallinn_stop_text(payload: str, now: datetime) -> List[Dict[str, Any]]:
+    """Parse transport.tallinn.ee text/plain stop-board rows."""
+
+    rows: List[Dict[str, Any]] = []
+    text = payload.lstrip("\ufeff").strip()
+    if not text:
+        return rows
+
+    reader = csv.reader(io.StringIO(text))
+    for record in reader:
+        cells = [cell.strip() for cell in record]
+        if not cells:
+            continue
+
+        row_type = cells[0].lower()
+        if row_type in {"transport", "stop"}:
+            continue
+        if len(cells) < 5:
+            continue
+
+        departure = seconds_since_midnight_to_datetime(cells[2], now)
+        seconds_until = parse_int(cells[5]) if len(cells) > 5 else None
+        in_minutes = None
+        if seconds_until is not None:
+            in_minutes = max(0, seconds_until // 60)
+        elif departure is not None:
+            in_minutes = minutes_until(departure, now)
+
+        rows.append(
+            {
+                "route": cells[1],
+                "headsign": cells[4],
+                "raw_time": seconds_since_midnight_to_text(cells[2]),
+                "departure_at": departure.isoformat() if departure else "",
+                "in_minutes": in_minutes,
+                "source": {
+                    "transport": cells[0],
+                    "route": cells[1],
+                    "expected_seconds": cells[2],
+                    "scheduled_seconds": cells[3],
+                    "destination": cells[4],
+                    "seconds_until": cells[5] if len(cells) > 5 else "",
+                    "raw": cells,
+                },
+            }
+        )
+
+    rows.sort(key=lambda r: r.get("departure_at", ""))
+    return rows
+
+
 def flatten_departure_lists(payload: Any) -> List[List[Dict[str, Any]]]:
     """Find list-like objects that look like departure lists."""
 
@@ -186,6 +268,17 @@ def flatten_departure_lists(payload: Any) -> List[List[Dict[str, Any]]]:
 
 def parse_departure_rows(payload: Any, now: datetime) -> List[Dict[str, Any]]:
     """Parse any stop-board payload into standard row objects."""
+    if isinstance(payload, str):
+        stripped = payload.strip()
+        if not stripped:
+            return []
+        if stripped[0] in "[{":
+            try:
+                return parse_departure_rows(json.loads(stripped), now)
+            except Exception:
+                pass
+        return parse_tallinn_stop_text(stripped, now)
+
     rows: List[Dict[str, Any]] = []
     candidates = flatten_departure_lists(payload)
     if not candidates:
@@ -439,26 +532,13 @@ def resolve_favorite_stop(
             "limit": int(favorite.get("limit", 0) or 0) or None,
         }
 
-    # Last-resort fallback: pick stop with exact route match and closest name token.
-    for rid in route_ids:
-        for trip_id in gtfs.trips_by_route.get(rid, []):
-            for stop_id in gtfs.trip_stops.get(trip_id, []):
-                if stop_id in gtfs.stop_id_to_name:
-                    return {
-                        "stop_id": stop_id,
-                        "route_short_name": favorite.get("route_short_name", ""),
-                        "headsign": favorite.get("headsign", ""),
-                        "stop_name": gtfs.stop_id_to_name.get(stop_id, ""),
-                        "label": favorite.get("label", "") or gtfs.stop_id_to_name.get(stop_id, ""),
-                        "limit": int(favorite.get("limit", 0) or 0) or None,
-                    }
     return None
 
 
 def build_transit_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     http_conf = config.get("http", {})
     timeout = int(http_conf.get("timeout_seconds", 20))
-    ua = str(http_conf.get("user_agent", "HomeAssistant Tallin Widgets"))
+    ua = str(http_conf.get("user_agent", "HomeAssistant Tallinn Widgets"))
     transit_conf = config.get("transit", {})
     favorites = list(transit_conf.get("favorites", []))[:5]
     default_limit = int(transit_conf.get("default_limit", 5))
@@ -499,7 +579,7 @@ def build_transit_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     now = datetime.now().astimezone()
     for stop_id, filters in stop_requests.items():
         try:
-            raw = http_get_json(STOP_API.format(stop_id), timeout, ua)
+            raw = http_get_text(STOP_API.format(stop_id), timeout, ua)
         except Exception as exc:
             errors.append(f"Failed stop-board request for stop {stop_id}: {exc}")
             continue
@@ -565,7 +645,7 @@ def parse_elapsed_minutes(reference: str, actual: str) -> str:
 def build_elron_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     http_conf = config.get("http", {})
     timeout = int(http_conf.get("timeout_seconds", 20))
-    ua = str(http_conf.get("user_agent", "HomeAssistant Tallin Widgets"))
+    ua = str(http_conf.get("user_agent", "HomeAssistant Tallinn Widgets"))
     train_conf = config.get("trains", {})
     default_limit = int(train_conf.get("default_limit", 20))
     trips = train_conf.get("trips", [])
