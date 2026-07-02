@@ -575,12 +575,16 @@ class TallinnWidgetsCard extends HTMLElement {
         this._state[input.dataset.stationInput].selected = event.target.value;
         this._loadDepartures(input.dataset.stationInput);
       });
+      input.addEventListener("keypress", (event) => event.stopPropagation(), true);
+      input.addEventListener("keyup", (event) => event.stopPropagation(), true);
       input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
         if (event.key === "Enter") {
+          event.preventDefault();
           this._state[input.dataset.stationInput].selected = event.target.value;
           this._loadDepartures(input.dataset.stationInput);
         }
-      });
+      }, true);
     });
     this.querySelectorAll("[data-load]").forEach((button) =>
       button.addEventListener("click", () => this._loadDepartures(button.dataset.load))
