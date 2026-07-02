@@ -119,10 +119,8 @@ class TallinnWidgetsCard extends HTMLElement {
     section.query = query;
     section.selected = query;
     section.error = "";
-    section.payload = null;
     window.clearTimeout(section.timer);
     section.timer = window.setTimeout(() => this._loadStations(kind, query), 250);
-    this._render();
   }
 
   async _loadStations(kind, query) {
@@ -130,19 +128,19 @@ class TallinnWidgetsCard extends HTMLElement {
     const trimmed = query.trim();
     if (!trimmed && kind === "transit") {
       section.stations = [];
-      this._render();
+      this._updateStationOptions(kind);
       return;
     }
     if (kind === "transit" && trimmed.length < 2) {
       section.stations = [];
-      this._render();
+      this._updateStationOptions(kind);
       return;
     }
 
     section.loadingStations = true;
     section.requestId += 1;
     const requestId = section.requestId;
-    this._render();
+    this._renderAfterStationSearch(kind);
     try {
       const path = `tallinn_widgets/${kind}/stations?q=${encodeURIComponent(
         trimmed
@@ -160,7 +158,31 @@ class TallinnWidgetsCard extends HTMLElement {
       if (requestId === section.requestId) {
         section.loadingStations = false;
       }
-      this._render();
+      this._renderAfterStationSearch(kind);
+    }
+  }
+
+  _renderAfterStationSearch(kind) {
+    if (this._stationInputFocused(kind)) {
+      this._updateStationOptions(kind);
+      return;
+    }
+    this._render();
+  }
+
+  _stationInputFocused(kind) {
+    const active = document.activeElement;
+    return (
+      active instanceof HTMLElement &&
+      this.contains(active) &&
+      active.dataset.stationInput === kind
+    );
+  }
+
+  _updateStationOptions(kind) {
+    const list = this.querySelector(`#${this._instanceId}-${kind}-stations`);
+    if (list) {
+      list.innerHTML = this._stationOptions(kind);
     }
   }
 
