@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import unicodedata
+import urllib.parse
 import urllib.request
 import zipfile
 from collections import defaultdict
@@ -18,6 +19,9 @@ from typing import Any, Dict, List, Optional
 
 GTFS_TTL_SECONDS = 60 * 60 * 24
 STOP_API = "https://transport.tallinn.ee/siri-stop-departures.php?stopid={}"
+ELRON_STOPS_URL = "https://elron.ee/stops_data.json"
+ELRON_STOP_URL = "https://elron.ee/live-map/stop/{}"
+PUBLIC_TRANSIT_ROUTE_TYPES = {"0": "tram", "3": "bus"}
 TRANSIT_TIME_KEYS = (
     "departure_time",
     "estimated_time",
@@ -377,6 +381,7 @@ class GtfsCache:
     stop_id_to_code: Dict[str, str]
     stop_id_to_norm_name: Dict[str, str]
     updated_at: float
+    route_id_to_type: Dict[str, str] = field(default_factory=dict)
     trip_departure_times: Dict[str, List[str]] = field(default_factory=dict)
     trip_service_id: Dict[str, str] = field(default_factory=dict)
     service_calendar: Dict[str, Dict[str, str]] = field(default_factory=dict)
@@ -404,11 +409,13 @@ def build_gtfs_cache(gtfs_bytes: bytes) -> GtfsCache:
 
     route_short_to_ids: Dict[str, List[str]] = defaultdict(list)
     route_id_to_short: Dict[str, str] = {}
+    route_id_to_type: Dict[str, str] = {}
     for row in routes_rows:
         route_id = str(row.get("route_id", "")).strip()
         route_short = str(row.get("route_short_name", "")).strip()
         if route_id:
             route_id_to_short[route_id] = route_short
+            route_id_to_type[route_id] = str(row.get("route_type", "")).strip()
             if route_short:
                 route_short_to_ids[normalize_text(route_short)].append(route_id)
 
@@ -489,6 +496,7 @@ def build_gtfs_cache(gtfs_bytes: bytes) -> GtfsCache:
         stop_id_to_code=stop_id_to_code,
         stop_id_to_norm_name=stop_id_to_norm_name,
         updated_at=datetime.now().timestamp(),
+        route_id_to_type=route_id_to_type,
         trip_departure_times=trip_departure_times,
         trip_service_id=trip_service_id,
         service_calendar=service_calendar,
@@ -506,6 +514,7 @@ def load_gtfs_cache(cache_path: str, gtfs_url: str, timeout: int, ua: str) -> Gt
             age = now - float(payload.get("updated_at", 0))
             if age < GTFS_TTL_SECONDS:
                 for key in (
+                    "route_id_to_type",
                     "trip_departure_times",
                     "trip_service_id",
                     "service_calendar",
@@ -523,6 +532,7 @@ def load_gtfs_cache(cache_path: str, gtfs_url: str, timeout: int, ua: str) -> Gt
                     stop_id_to_code=payload["stop_id_to_code"],
                     stop_id_to_norm_name=payload["stop_id_to_norm_name"],
                     updated_at=float(payload.get("updated_at", now)),
+                    route_id_to_type=payload["route_id_to_type"],
                     trip_departure_times={
                         k: list(v) for k, v in payload["trip_departure_times"].items()
                     },
@@ -550,6 +560,7 @@ def load_gtfs_cache(cache_path: str, gtfs_url: str, timeout: int, ua: str) -> Gt
             "stop_id_to_name": built.stop_id_to_name,
             "stop_id_to_code": built.stop_id_to_code,
             "stop_id_to_norm_name": built.stop_id_to_norm_name,
+            "route_id_to_type": built.route_id_to_type,
             "trip_departure_times": built.trip_departure_times,
             "trip_service_id": built.trip_service_id,
             "service_calendar": built.service_calendar,
@@ -619,6 +630,20 @@ def gtfs_time_to_text(value: Any) -> str:
     if seconds is None:
         return str(value or "")
     return seconds_since_midnight_to_text(seconds)
+
+
+def load_transit_gtfs(config: Dict[str, Any]) -> GtfsCache:
+    http_conf = config.get("http", {})
+    timeout = int(http_conf.get("timeout_seconds", 20))
+    ua = str(http_conf.get("user_agent", "HomeAssistant Tallinn Widgets"))
+    transit_conf = config.get("transit", {})
+    gtfs_url = str(transit_conf.get("gtfs_url"))
+    gtfs_cache_path = str(
+        transit_conf.get("gtfs_cache_path", "/tmp/tallinn_gtfs_cache.json")
+    )
+    if not gtfs_url:
+        raise ValueError("Missing transit.gtfs_url in config")
+    return load_gtfs_cache(gtfs_cache_path, gtfs_url, timeout, ua)
 
 
 def resolve_favorite_stop(
@@ -757,6 +782,174 @@ def scheduled_rows_for_favorite(
     return rows[:limit]
 
 
+def _public_stop_modes(gtfs: GtfsCache) -> Dict[str, set[str]]:
+    modes_by_stop: Dict[str, set[str]] = defaultdict(set)
+    for route_id, trip_ids in gtfs.trips_by_route.items():
+        mode = PUBLIC_TRANSIT_ROUTE_TYPES.get(gtfs.route_id_to_type.get(route_id, ""))
+        if not mode:
+            continue
+        for trip_id in trip_ids:
+            for stop_id in gtfs.trip_stops.get(trip_id, []):
+                modes_by_stop[stop_id].add(mode)
+    return modes_by_stop
+
+
+def build_transit_station_list(
+    config: Dict[str, Any], query: str = "", limit: int = 30
+) -> Dict[str, Any]:
+    now = datetime.now().astimezone()
+    normalized_query = normalize_text(query)
+    if not normalized_query:
+        return {
+            "status": "ok",
+            "updated_at": now.isoformat(),
+            "stations": [],
+            "count": 0,
+        }
+
+    gtfs = load_transit_gtfs(config)
+    modes_by_stop = _public_stop_modes(gtfs)
+    stations: Dict[str, Dict[str, Any]] = {}
+    for stop_id, modes in modes_by_stop.items():
+        name = gtfs.stop_id_to_name.get(stop_id, "")
+        normalized_name = gtfs.stop_id_to_norm_name.get(stop_id, "")
+        if not name or normalized_query not in normalized_name:
+            continue
+        station = stations.setdefault(
+            normalized_name,
+            {"id": name, "name": name, "modes": set(), "stop_count": 0},
+        )
+        station["modes"].update(modes)
+        station["stop_count"] += 1
+
+    rows = sorted(
+        (
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "modes": sorted(item["modes"]),
+                "stop_count": item["stop_count"],
+            }
+            for item in stations.values()
+        ),
+        key=lambda item: normalize_text(item["name"]),
+    )[: max(1, int(limit))]
+
+    return {
+        "status": "ok",
+        "updated_at": now.isoformat(),
+        "stations": rows,
+        "count": len(rows),
+    }
+
+
+def _format_due(minutes: int) -> str:
+    if minutes <= 0:
+        return "now"
+    return f"{minutes} min"
+
+
+def build_transit_station_departures(
+    config: Dict[str, Any],
+    station: str,
+    window_minutes: int = 60,
+    limit: int = 80,
+) -> Dict[str, Any]:
+    now = datetime.now().astimezone()
+    station_norm = normalize_text(station)
+    if not station_norm:
+        return {
+            "status": "error",
+            "updated_at": now.isoformat(),
+            "errors": ["Missing station"],
+            "payload": {},
+        }
+
+    gtfs = load_transit_gtfs(config)
+    modes_by_stop = _public_stop_modes(gtfs)
+    stop_ids = {
+        stop_id
+        for stop_id, stop_norm in gtfs.stop_id_to_norm_name.items()
+        if stop_norm == station_norm and stop_id in modes_by_stop
+    }
+    if not stop_ids:
+        return {
+            "status": "error",
+            "updated_at": now.isoformat(),
+            "errors": [f"Unknown public transit station: {station}"],
+            "payload": {"station": station, "departures": []},
+        }
+
+    until = now + timedelta(minutes=max(1, int(window_minutes)))
+    service_dates = (
+        now.date() - timedelta(days=1),
+        now.date(),
+        now.date() + timedelta(days=1),
+    )
+    rows: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for route_id, trip_ids in gtfs.trips_by_route.items():
+        mode = PUBLIC_TRANSIT_ROUTE_TYPES.get(gtfs.route_id_to_type.get(route_id, ""))
+        if not mode:
+            continue
+        route_short = gtfs.route_id_to_short.get(route_id, "")
+        for trip_id in trip_ids:
+            service_id = gtfs.trip_service_id.get(trip_id, "")
+            if not service_id:
+                continue
+            stop_sequence = gtfs.trip_stops.get(trip_id, [])
+            departure_times = gtfs.trip_departure_times.get(trip_id, [])
+            for idx, stop_id in enumerate(stop_sequence):
+                if stop_id not in stop_ids or idx >= len(departure_times):
+                    continue
+                departure_time = departure_times[idx]
+                for service_date in service_dates:
+                    if not service_active_on(gtfs, service_id, service_date):
+                        continue
+                    departure_at = gtfs_time_to_datetime(departure_time, service_date, now)
+                    if departure_at is None or departure_at < now - timedelta(minutes=1):
+                        continue
+                    if departure_at > until:
+                        continue
+                    seen_key = (trip_id, stop_id, departure_at.isoformat())
+                    if seen_key in seen:
+                        continue
+                    seen.add(seen_key)
+                    in_minutes = minutes_until(departure_at, now)
+                    rows.append(
+                        {
+                            "mode": mode,
+                            "route": route_short,
+                            "direction": gtfs.trip_headsign.get(trip_id, ""),
+                            "time": gtfs_time_to_text(departure_time),
+                            "departure_at": departure_at.isoformat(),
+                            "in_minutes": in_minutes,
+                            "due": _format_due(in_minutes),
+                            "stop_id": stop_id,
+                            "stop_name": gtfs.stop_id_to_name.get(stop_id, station),
+                            "stop_code": gtfs.stop_id_to_code.get(stop_id, ""),
+                            "trip_id": trip_id,
+                            "data_source": "gtfs_schedule",
+                        }
+                    )
+
+    rows.sort(key=lambda item: (item["departure_at"], item["route"], item["direction"]))
+    rows = rows[: max(1, int(limit))]
+    return {
+        "status": "ok",
+        "updated_at": now.isoformat(),
+        "payload": {
+            "station": station,
+            "window_minutes": int(window_minutes),
+            "departures": rows,
+            "count": len(rows),
+            "data_source": "gtfs_schedule",
+        },
+        "errors": [],
+    }
+
+
 def build_transit_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     http_conf = config.get("http", {})
     timeout = int(http_conf.get("timeout_seconds", 20))
@@ -764,10 +957,7 @@ def build_transit_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     transit_conf = config.get("transit", {})
     favorites = list(transit_conf.get("favorites", []))[:5]
     default_limit = int(transit_conf.get("default_limit", 5))
-    gtfs_url = str(transit_conf.get("gtfs_url"))
-    gtfs_cache_path = str(transit_conf.get("gtfs_cache_path", "/tmp/tallinn_gtfs_cache.json"))
-
-    if not gtfs_url:
+    if not transit_conf.get("gtfs_url"):
         return {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "status": "error",
@@ -775,7 +965,7 @@ def build_transit_payload(config: Dict[str, Any]) -> Dict[str, Any]:
             "payload": {},
         }
 
-    gtfs = load_gtfs_cache(gtfs_cache_path, gtfs_url, timeout, ua)
+    gtfs = load_transit_gtfs(config)
     resolved: List[Dict[str, Any]] = []
     errors: List[str] = []
     stop_requests: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -872,6 +1062,133 @@ def parse_elapsed_minutes(reference: str, actual: str) -> str:
     if delta < 0:
         return f"{delta}"
     return "0"
+
+
+def build_elron_station_list(
+    query: str = "", limit: int = 50, timeout: int = 20, ua: str = "HomeAssistant Tallinn Widgets"
+) -> Dict[str, Any]:
+    now = datetime.now().astimezone()
+    payload = http_get_json(ELRON_STOPS_URL, timeout, ua)
+    stops = payload.get("data") if isinstance(payload, dict) else None
+    normalized_query = normalize_text(query)
+    rows = []
+    if isinstance(stops, list):
+        for item in stops:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("peatus", "")).strip()
+            if not name:
+                continue
+            if normalized_query and normalized_query not in normalize_text(name):
+                continue
+            rows.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "latitude": item.get("latitude"),
+                    "longitude": item.get("longitude"),
+                    "message": str(item.get("teade", "") or "").strip(),
+                }
+            )
+
+    rows.sort(key=lambda item: normalize_text(item["name"]))
+    rows = rows[: max(1, int(limit))]
+    return {
+        "status": "ok",
+        "updated_at": now.isoformat(),
+        "stations": rows,
+        "count": len(rows),
+    }
+
+
+def _parse_local_station_time(
+    station_date: str, station_time: str, now: datetime
+) -> Optional[datetime]:
+    if not station_date or not station_time:
+        return None
+    try:
+        parsed = datetime.strptime(
+            f"{station_date} {station_time}", "%Y-%m-%d %H:%M"
+        )
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=now.astimezone().tzinfo)
+
+
+def build_elron_station_departures(
+    station: str,
+    window_minutes: int = 60,
+    limit: int = 80,
+    timeout: int = 20,
+    ua: str = "HomeAssistant Tallinn Widgets",
+) -> Dict[str, Any]:
+    now = datetime.now().astimezone()
+    if not station.strip():
+        return {
+            "status": "error",
+            "updated_at": now.isoformat(),
+            "errors": ["Missing station"],
+            "payload": {},
+        }
+
+    url = ELRON_STOP_URL.format(urllib.parse.quote(station.strip(), safe=""))
+    payload = http_get_json(url, timeout, ua)
+    raw_rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(raw_rows, list):
+        return {
+            "status": "error",
+            "updated_at": now.isoformat(),
+            "errors": [f"Unexpected Elron station payload for {station}"],
+            "payload": {"station": station, "departures": []},
+        }
+
+    until = now + timedelta(minutes=max(1, int(window_minutes)))
+    rows: List[Dict[str, Any]] = []
+    for item in raw_rows:
+        if not isinstance(item, dict):
+            continue
+        planned = str(item.get("plaaniline_aeg", "")).strip()
+        actual = str(item.get("tegelik_aeg", "")).strip()
+        station_date = str(item.get("kuupaev", "")).strip()
+        departure_at = _parse_local_station_time(station_date, actual or planned, now)
+        if departure_at is None:
+            continue
+        if departure_at < now - timedelta(minutes=1) or departure_at > until:
+            continue
+        in_minutes = minutes_until(departure_at, now)
+        rows.append(
+            {
+                "trip": str(item.get("reis", "")).strip(),
+                "line": str(item.get("liin", "")).strip(),
+                "direction": str(item.get("sihtjaam", "")).strip(),
+                "time": actual or planned,
+                "planned": planned,
+                "actual": actual,
+                "departure_at": departure_at.isoformat(),
+                "in_minutes": in_minutes,
+                "due": _format_due(in_minutes),
+                "platform": str(item.get("peatuskoht", "")).strip(),
+                "platform_changed": str(item.get("peatuskoht_muutunud", "")).strip(),
+                "status": str(item.get("reisi_staatus", "")).strip(),
+                "message": str(item.get("lisateade", "") or item.get("pohjus_teade", "") or "").strip(),
+                "data_source": "elron_live_map",
+            }
+        )
+
+    rows.sort(key=lambda item: (item["departure_at"], item["line"], item["trip"]))
+    rows = rows[: max(1, int(limit))]
+    return {
+        "status": "ok",
+        "updated_at": now.isoformat(),
+        "payload": {
+            "station": station,
+            "window_minutes": int(window_minutes),
+            "departures": rows,
+            "count": len(rows),
+            "data_source": "elron_live_map",
+        },
+        "errors": [],
+    }
 
 
 def build_elron_payload(config: Dict[str, Any]) -> Dict[str, Any]:

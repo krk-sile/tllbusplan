@@ -17,6 +17,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from homeassistant.helpers import config_validation as cv
 
+from .config_util import resolve_config_path
 from .const import (
     CONF_CONFIG_PATH,
     CONF_ELRON_NAME,
@@ -59,22 +60,7 @@ def _resolve_payload_error(error: str) -> Dict[str, Any]:
 
 
 def _config_path(configured: str) -> Path:
-    explicit = Path(configured).expanduser()
-    if explicit.exists():
-        return explicit
-
-    default_path = Path(DEFAULT_CONFIG_PATH)
-    candidates = [
-        default_path,
-        Path("/config/tallinn_widgets/config.example.json"),
-    ]
-    if explicit == default_path:
-        candidates.append(Path(__file__).with_name("config.example.json"))
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return explicit
+    return resolve_config_path(configured)
 
 
 def _load_transit_payload(path: Path) -> Dict[str, Any]:
