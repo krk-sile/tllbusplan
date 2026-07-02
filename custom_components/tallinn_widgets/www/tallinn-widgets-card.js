@@ -393,42 +393,44 @@ class TallinnWidgetsCard extends HTMLElement {
       : "";
 
     return `
-      <section class="tw-section" data-section="${this._escape(kind)}">
-        <div class="tw-section-header">
-          <div class="tw-heading">
-            <ha-icon icon="${this._escape(sectionConfig.icon)}"></ha-icon>
-            <div>
-              <h3>${this._escape(title)}</h3>
-              <div class="tw-subtitle">Next ${Number(this._config.windowMinutes) || 60} minutes</div>
+      <ha-card class="tw-section-card">
+        <section class="tw-section" data-section="${this._escape(kind)}">
+          <div class="tw-section-header">
+            <div class="tw-heading">
+              <ha-icon icon="${this._escape(sectionConfig.icon)}"></ha-icon>
+              <div>
+                <h3>${this._escape(title)}</h3>
+                <div class="tw-subtitle">Next ${Number(this._config.windowMinutes) || 60} minutes</div>
+              </div>
             </div>
+            <button class="tw-icon-button" data-refresh="${kind}" title="Refresh" aria-label="Refresh ${this._escape(title)} departures">
+              <ha-icon icon="mdi:refresh"></ha-icon>
+            </button>
           </div>
-          <button class="tw-icon-button" data-refresh="${kind}" title="Refresh" aria-label="Refresh ${this._escape(title)} departures">
-            <ha-icon icon="mdi:refresh"></ha-icon>
-          </button>
-        </div>
-        <div class="tw-picker">
-          <input
-            class="tw-input"
-            data-station-input="${kind}"
-            aria-label="${this._escape(sectionConfig.ariaLabel)}"
-            placeholder="${this._escape(sectionConfig.placeholder)}"
-            value="${selected}"
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <div class="tw-search-status" data-search-status="${kind}"></div>
-          <div class="tw-results" data-results="${kind}">${this._stationResults(kind)}</div>
-        </div>
-        <div class="tw-actions">
-          <button class="tw-primary" data-load="${kind}">Show</button>
-          <button data-save-default="${kind}" ${selected ? "" : "disabled"}>Set default</button>
-          <button data-clear-default="${kind}" ${section.defaultStation ? "" : "disabled"}>Clear</button>
-        </div>
-        ${defaultText}
-        ${section.loadingDepartures ? `<div class="tw-muted">Loading...</div>` : ""}
-        ${section.error && !section.searchOpen ? `<div class="tw-error">${this._escape(section.error)}</div>` : ""}
-        ${this._departures(kind)}
-      </section>
+          <div class="tw-picker">
+            <input
+              class="tw-input"
+              data-station-input="${kind}"
+              aria-label="${this._escape(sectionConfig.ariaLabel)}"
+              placeholder="${this._escape(sectionConfig.placeholder)}"
+              value="${selected}"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <div class="tw-search-status" data-search-status="${kind}"></div>
+            <div class="tw-results" data-results="${kind}">${this._stationResults(kind)}</div>
+          </div>
+          <div class="tw-actions">
+            <button class="tw-primary" data-load="${kind}">Show</button>
+            <button data-save-default="${kind}" ${selected ? "" : "disabled"}>Set default</button>
+            <button data-clear-default="${kind}" ${section.defaultStation ? "" : "disabled"}>Clear</button>
+          </div>
+          ${defaultText}
+          ${section.loadingDepartures ? `<div class="tw-muted">Loading...</div>` : ""}
+          ${section.error && !section.searchOpen ? `<div class="tw-error">${this._escape(section.error)}</div>` : ""}
+          ${this._departures(kind)}
+        </section>
+      </ha-card>
     `;
   }
 
@@ -460,20 +462,13 @@ class TallinnWidgetsCard extends HTMLElement {
 
   _departureRow(row, isTrain) {
     const line = isTrain ? row.trip || row.line || "-" : row.route || "-";
-    const meta = isTrain ? row.line || "" : row.stop_code || "";
-    const platform = isTrain ? row.platform || "" : "";
     return `
       <div class="tw-row">
-        <div class="tw-row-top">
-          <span class="tw-due">${this._escape(row.due || "-")}</span>
-          <span class="tw-route">${this._escape(line)}</span>
-          <span class="tw-time">${this._escape(row.time || "-")}</span>
-        </div>
-        <div class="tw-destination">${this._escape(row.direction || "-")}</div>
-        <div class="tw-detail-line">
-          ${meta ? `<span>${this._escape(meta)}</span>` : ""}
-          ${platform ? `<span>Track ${this._escape(platform)}</span>` : ""}
-        </div>
+        <span class="tw-due">${this._escape(row.due || "-")}</span>
+        <span class="tw-route">${this._escape(line)}</span>
+        <span class="tw-arrow" aria-hidden="true">-&gt;</span>
+        <span class="tw-destination">${this._escape(row.direction || "-")}</span>
+        <span class="tw-time">${this._escape(row.time || "-")}</span>
       </div>
     `;
   }
@@ -485,10 +480,15 @@ class TallinnWidgetsCard extends HTMLElement {
 
     const focus = this._captureFocus();
     this.innerHTML = `
-      <ha-card>
-        <style>
-          .tw-card {
-            padding: 20px;
+      <style>
+          tallinn-widgets-card {
+            display: block;
+          }
+          .tw-board {
+            box-sizing: border-box;
+            display: grid;
+            gap: 16px;
+            width: 100%;
           }
           .tw-title-row {
             align-items: baseline;
@@ -515,13 +515,14 @@ class TallinnWidgetsCard extends HTMLElement {
             gap: 20px;
             grid-template-columns: repeat(3, minmax(240px, 1fr));
           }
+          .tw-section-card {
+            display: block;
+            min-width: 0;
+          }
           .tw-section {
             box-sizing: border-box;
             min-width: 0;
-          }
-          .tw-section + .tw-section {
-            border-left: 1px solid var(--divider-color);
-            padding-left: 16px;
+            padding: 20px;
           }
           .tw-section-header {
             align-items: center;
@@ -552,7 +553,6 @@ class TallinnWidgetsCard extends HTMLElement {
           .tw-muted,
           .tw-empty,
           .tw-source,
-          .tw-detail-line,
           .tw-search-status,
           .tw-result-empty {
             color: var(--secondary-text-color);
@@ -682,17 +682,13 @@ class TallinnWidgetsCard extends HTMLElement {
             margin-top: 12px;
           }
           .tw-row {
+            align-items: center;
             border-bottom: 1px solid var(--divider-color);
             display: grid;
-            gap: 4px;
-            min-height: 56px;
+            gap: 8px;
+            grid-template-columns: minmax(42px, auto) minmax(28px, auto) auto minmax(0, 1fr) auto;
+            min-height: 44px;
             padding: 8px 0;
-          }
-          .tw-row-top {
-            align-items: center;
-            display: grid;
-            gap: 6px;
-            grid-template-columns: minmax(44px, auto) minmax(32px, auto) 1fr;
           }
           .tw-due {
             color: var(--primary-text-color);
@@ -703,6 +699,7 @@ class TallinnWidgetsCard extends HTMLElement {
           .tw-time {
             color: var(--primary-text-color);
             font-size: 13px;
+            justify-self: end;
             text-align: right;
             white-space: nowrap;
           }
@@ -716,8 +713,17 @@ class TallinnWidgetsCard extends HTMLElement {
             font-weight: 700;
             justify-content: center;
             line-height: 1;
+            max-width: 86px;
             min-width: 28px;
+            overflow: hidden;
             padding: 5px 7px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .tw-arrow {
+            color: var(--secondary-text-color);
+            font-size: 12px;
+            font-weight: 600;
           }
           .tw-destination {
             color: var(--primary-text-color);
@@ -727,7 +733,6 @@ class TallinnWidgetsCard extends HTMLElement {
             text-overflow: ellipsis;
             white-space: nowrap;
           }
-          .tw-detail-line,
           .tw-source {
             display: flex;
             gap: 8px;
@@ -740,12 +745,6 @@ class TallinnWidgetsCard extends HTMLElement {
             .tw-grid {
               grid-template-columns: 1fr;
             }
-            .tw-section + .tw-section {
-              border-left: 0;
-              border-top: 1px solid var(--divider-color);
-              padding-left: 0;
-              padding-top: 16px;
-            }
           }
           @media (max-width: 560px) {
             .tw-title-row {
@@ -757,19 +756,18 @@ class TallinnWidgetsCard extends HTMLElement {
               grid-template-columns: 1fr;
             }
           }
-        </style>
-        <div class="tw-card">
-          <div class="tw-title-row">
-            <h2 class="tw-title">${this._escape(this._config.title)}</h2>
-            <span class="tw-window">${Number(this._config.windowMinutes) || 60} min</span>
-          </div>
-          <div class="tw-grid">
-            ${this._section("tram", this._config.tramTitle)}
-            ${this._section("bus", this._config.busTitle)}
-            ${this._section("elron", this._config.trainTitle)}
-          </div>
+      </style>
+      <div class="tw-board">
+        <div class="tw-title-row">
+          <h2 class="tw-title">${this._escape(this._config.title)}</h2>
+          <span class="tw-window">${Number(this._config.windowMinutes) || 60} min</span>
         </div>
-      </ha-card>
+        <div class="tw-grid">
+          ${this._section("tram", this._config.tramTitle)}
+          ${this._section("bus", this._config.busTitle)}
+          ${this._section("elron", this._config.trainTitle)}
+        </div>
+      </div>
     `;
     this._bindEvents();
     this._restoreFocus(focus);
