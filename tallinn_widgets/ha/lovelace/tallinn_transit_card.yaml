@@ -1,27 +1,44 @@
 type: markdown
-content: >
+title: Tallinn Public Transit
+content: |
   {% set payload = state_attr("sensor.tallinn_transit_board", "payload") | default({}) %}
   {% set status = state_attr("sensor.tallinn_transit_board", "status") %}
   {% set errors = state_attr("sensor.tallinn_transit_board", "errors") | default([]) %}
   {% set departures = payload.get("departures", []) %}
   {% if status == "error" %}
-  **Transit widget failed to refresh**  
-  {% for e in errors %}* {{ e }}<br>{% endfor %}
+  **Transit widget failed to refresh**
+
+  {% for e in errors %}
+  - {{ e }}
+  {% endfor %}
   {% elif departures | count == 0 %}
   No favorite departures found yet.
   {% else %}
-  ### Tallinn Public Transit
-  {% for item in departures %}
-  #### {{ item.label }} ({{ item.route_filter }} / {{ item.headsign_filter }})  
-  | Route | Direction | In | Time |
-  | --- | --- | --- | --- |
-  {% if item.departures | count > 0 %}
-  {% for row in item.departures %}
-  | {{ row.route or '-' }} | {{ row.headsign or '-' }} | {{ row.in_minutes }} | {{ row.time or '-' }} |
+  {% if status == "partial" and errors %}
+  Some configured favorites need attention:
+
+  {% for e in errors %}
+  - {{ e }}
   {% endfor %}
-  {% else %}
-  | - | - | - | - |
+
+  {% endif %}
+  {% for item in departures %}
+  **{{ item.label }}**  
+  Route {{ item.route_filter or "-" }} toward {{ item.headsign_filter or "-" }}
+
+  {% if item.departures | count > 0 -%}
+  | Due | Time | Direction |
+  | ---: | --- | --- |
+  {% for row in item.departures -%}
+  | {{ row.in_minutes or "-" }} | {{ row.time or "-" }} | {{ row.headsign or item.headsign_filter or "-" }} |
+  {% endfor %}
+  {% else -%}
+  _No departures available right now._
   {% endif %}
 
+  {% if not loop.last %}
+  ---
+
+  {% endif %}
   {% endfor %}
   {% endif %}

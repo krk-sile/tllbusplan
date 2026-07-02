@@ -11,8 +11,8 @@ import unicodedata
 import urllib.request
 import zipfile
 from collections import defaultdict
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -377,6 +377,10 @@ class GtfsCache:
     stop_id_to_code: Dict[str, str]
     stop_id_to_norm_name: Dict[str, str]
     updated_at: float
+    trip_departure_times: Dict[str, List[str]] = field(default_factory=dict)
+    trip_service_id: Dict[str, str] = field(default_factory=dict)
+    service_calendar: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    service_exceptions_by_date: Dict[str, Dict[str, int]] = field(default_factory=dict)
 
 
 def build_gtfs_cache(gtfs_bytes: bytes) -> GtfsCache:
@@ -387,6 +391,16 @@ def build_gtfs_cache(gtfs_bytes: bytes) -> GtfsCache:
             zf.read("stop_times.txt").decode("utf-8", errors="ignore")
         )
         stops_rows = parse_csv(zf.read("stops.txt").decode("utf-8", errors="ignore"))
+        calendar_rows = (
+            parse_csv(zf.read("calendar.txt").decode("utf-8", errors="ignore"))
+            if "calendar.txt" in zf.namelist()
+            else []
+        )
+        calendar_dates_rows = (
+            parse_csv(zf.read("calendar_dates.txt").decode("utf-8", errors="ignore"))
+            if "calendar_dates.txt" in zf.namelist()
+            else []
+        )
 
     route_short_to_ids: Dict[str, List[str]] = defaultdict(list)
     route_id_to_short: Dict[str, str] = {}
@@ -400,21 +414,30 @@ def build_gtfs_cache(gtfs_bytes: bytes) -> GtfsCache:
 
     trips_by_route: Dict[str, List[str]] = defaultdict(list)
     trip_headsign: Dict[str, str] = {}
+    trip_service_id: Dict[str, str] = {}
     for row in trips_rows:
         trip_id = str(row.get("trip_id", "")).strip()
         route_id = str(row.get("route_id", "")).strip()
         headsign = str(row.get("trip_headsign", "")).strip()
         if trip_id and route_id:
             trips_by_route[route_id].append(trip_id)
+            service_id = str(row.get("service_id", "")).strip()
+            if service_id:
+                trip_service_id[trip_id] = service_id
             if headsign:
                 trip_headsign[trip_id] = headsign
 
     trip_stops: Dict[str, List[str]] = defaultdict(list)
+    trip_departure_times: Dict[str, List[str]] = defaultdict(list)
     for row in stop_times_rows:
         trip_id = str(row.get("trip_id", "")).strip()
         stop_id = str(row.get("stop_id", "")).strip()
         if trip_id and stop_id:
             trip_stops[trip_id].append(stop_id)
+            departure_time = str(
+                row.get("departure_time", "") or row.get("arrival_time", "")
+            ).strip()
+            trip_departure_times[trip_id].append(departure_time)
 
     stop_id_to_name: Dict[str, str] = {}
     stop_id_to_code: Dict[str, str] = {}
@@ -428,6 +451,34 @@ def build_gtfs_cache(gtfs_bytes: bytes) -> GtfsCache:
             stop_id_to_code[stop_id] = stop_code
             stop_id_to_norm_name[stop_id] = normalize_text(stop_name)
 
+    weekday_keys = (
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    )
+    service_calendar: Dict[str, Dict[str, str]] = {}
+    for row in calendar_rows:
+        service_id = str(row.get("service_id", "")).strip()
+        if not service_id:
+            continue
+        service_calendar[service_id] = {
+            "start_date": str(row.get("start_date", "")).strip(),
+            "end_date": str(row.get("end_date", "")).strip(),
+            **{key: str(row.get(key, "")).strip() for key in weekday_keys},
+        }
+
+    service_exceptions_by_date: Dict[str, Dict[str, int]] = defaultdict(dict)
+    for row in calendar_dates_rows:
+        service_id = str(row.get("service_id", "")).strip()
+        service_date = str(row.get("date", "")).strip()
+        exception_type = parse_int(row.get("exception_type"))
+        if service_id and service_date and exception_type is not None:
+            service_exceptions_by_date[service_date][service_id] = exception_type
+
     return GtfsCache(
         route_short_to_ids=route_short_to_ids,
         route_id_to_short=route_id_to_short,
@@ -438,6 +489,10 @@ def build_gtfs_cache(gtfs_bytes: bytes) -> GtfsCache:
         stop_id_to_code=stop_id_to_code,
         stop_id_to_norm_name=stop_id_to_norm_name,
         updated_at=datetime.now().timestamp(),
+        trip_departure_times=trip_departure_times,
+        trip_service_id=trip_service_id,
+        service_calendar=service_calendar,
+        service_exceptions_by_date=service_exceptions_by_date,
     )
 
 
@@ -450,6 +505,14 @@ def load_gtfs_cache(cache_path: str, gtfs_url: str, timeout: int, ua: str) -> Gt
                 payload = json.load(file)
             age = now - float(payload.get("updated_at", 0))
             if age < GTFS_TTL_SECONDS:
+                for key in (
+                    "trip_departure_times",
+                    "trip_service_id",
+                    "service_calendar",
+                    "service_exceptions_by_date",
+                ):
+                    if key not in payload:
+                        raise KeyError(f"GTFS cache missing {key}")
                 return GtfsCache(
                     route_short_to_ids={k: list(v) for k, v in payload["route_short_to_ids"].items()},
                     route_id_to_short=payload["route_id_to_short"],
@@ -460,6 +523,15 @@ def load_gtfs_cache(cache_path: str, gtfs_url: str, timeout: int, ua: str) -> Gt
                     stop_id_to_code=payload["stop_id_to_code"],
                     stop_id_to_norm_name=payload["stop_id_to_norm_name"],
                     updated_at=float(payload.get("updated_at", now)),
+                    trip_departure_times={
+                        k: list(v) for k, v in payload["trip_departure_times"].items()
+                    },
+                    trip_service_id=payload["trip_service_id"],
+                    service_calendar=payload["service_calendar"],
+                    service_exceptions_by_date={
+                        day: {sid: int(kind) for sid, kind in services.items()}
+                        for day, services in payload["service_exceptions_by_date"].items()
+                    },
                 )
         except Exception as exc:
             LOG.debug("Failed to read GTFS cache, rebuilding. err=%s", exc)
@@ -478,9 +550,75 @@ def load_gtfs_cache(cache_path: str, gtfs_url: str, timeout: int, ua: str) -> Gt
             "stop_id_to_name": built.stop_id_to_name,
             "stop_id_to_code": built.stop_id_to_code,
             "stop_id_to_norm_name": built.stop_id_to_norm_name,
+            "trip_departure_times": built.trip_departure_times,
+            "trip_service_id": built.trip_service_id,
+            "service_calendar": built.service_calendar,
+            "service_exceptions_by_date": built.service_exceptions_by_date,
         },
     )
     return built
+
+
+WEEKDAY_KEYS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+
+
+def service_active_on(gtfs: GtfsCache, service_id: str, service_date: date) -> bool:
+    ymd = service_date.strftime("%Y%m%d")
+    exception = gtfs.service_exceptions_by_date.get(ymd, {}).get(service_id)
+    if exception is not None:
+        return exception == 1
+
+    calendar = gtfs.service_calendar.get(service_id)
+    if not calendar:
+        return False
+    if not (calendar.get("start_date", "") <= ymd <= calendar.get("end_date", "")):
+        return False
+    return calendar.get(WEEKDAY_KEYS[service_date.weekday()]) == "1"
+
+
+def gtfs_time_to_seconds(value: Any) -> Optional[int]:
+    parts = str(value or "").strip().split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        hours, minutes, seconds = (int(part) for part in parts)
+    except ValueError:
+        return None
+    if hours < 0 or minutes < 0 or seconds < 0:
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def gtfs_time_to_datetime(value: Any, service_date: date, now: datetime) -> Optional[datetime]:
+    seconds = gtfs_time_to_seconds(value)
+    if seconds is None:
+        return None
+    local_now = now.astimezone()
+    local_midnight = local_now.replace(
+        year=service_date.year,
+        month=service_date.month,
+        day=service_date.day,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return local_midnight + timedelta(seconds=seconds)
+
+
+def gtfs_time_to_text(value: Any) -> str:
+    seconds = gtfs_time_to_seconds(value)
+    if seconds is None:
+        return str(value or "")
+    return seconds_since_midnight_to_text(seconds)
 
 
 def resolve_favorite_stop(
@@ -535,6 +673,90 @@ def resolve_favorite_stop(
     return None
 
 
+def scheduled_rows_for_favorite(
+    gtfs: GtfsCache,
+    stop_id: str,
+    favorite: Dict[str, Any],
+    now: datetime,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Build static GTFS schedule rows when the realtime stop board is empty."""
+
+    route_filter = normalize_text(favorite.get("route_short_name"))
+    headsign_filter = normalize_text(favorite.get("headsign"))
+    route_ids = gtfs.route_short_to_ids.get(route_filter, []) if route_filter else []
+    if not route_ids and route_filter:
+        route_ids = [
+            rid
+            for rid, short in gtfs.route_id_to_short.items()
+            if normalize_text(short) == route_filter
+        ]
+    if not route_ids:
+        return []
+
+    local_today = now.astimezone().date()
+    service_dates = (
+        local_today - timedelta(days=1),
+        local_today,
+        local_today + timedelta(days=1),
+    )
+    rows: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for route_id in route_ids:
+        route_short = gtfs.route_id_to_short.get(route_id, "")
+        for trip_id in gtfs.trips_by_route.get(route_id, []):
+            trip_sign = normalize_text(gtfs.trip_headsign.get(trip_id, ""))
+            if (
+                headsign_filter
+                and trip_sign
+                and headsign_filter not in trip_sign
+                and trip_sign not in headsign_filter
+            ):
+                continue
+
+            service_id = gtfs.trip_service_id.get(trip_id, "")
+            if not service_id:
+                continue
+
+            stop_ids = gtfs.trip_stops.get(trip_id, [])
+            departure_times = gtfs.trip_departure_times.get(trip_id, [])
+            for idx, trip_stop_id in enumerate(stop_ids):
+                if trip_stop_id != stop_id or idx >= len(departure_times):
+                    continue
+                departure_time = departure_times[idx]
+                for service_date in service_dates:
+                    if not service_active_on(gtfs, service_id, service_date):
+                        continue
+                    departure_at = gtfs_time_to_datetime(departure_time, service_date, now)
+                    if departure_at is None:
+                        continue
+                    if departure_at < now - timedelta(minutes=1):
+                        continue
+                    seen_key = (trip_id, departure_at.isoformat())
+                    if seen_key in seen:
+                        continue
+                    seen.add(seen_key)
+                    rows.append(
+                        {
+                            "route": route_short,
+                            "headsign": gtfs.trip_headsign.get(trip_id, ""),
+                            "raw_time": gtfs_time_to_text(departure_time),
+                            "departure_at": departure_at.isoformat(),
+                            "in_minutes": minutes_until(departure_at, now),
+                            "source": {
+                                "kind": "gtfs_schedule",
+                                "trip_id": trip_id,
+                                "service_id": service_id,
+                                "service_date": service_date.isoformat(),
+                            },
+                        }
+                    )
+
+    rows.sort(key=lambda row: row.get("departure_at", ""))
+    return rows[:limit]
+
+
 def build_transit_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     http_conf = config.get("http", {})
     timeout = int(http_conf.get("timeout_seconds", 20))
@@ -587,9 +809,18 @@ def build_transit_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         for idx, flt in enumerate(filters):
             filtered = filter_rows_for_favorite(parsed_rows, flt)
             limit = flt.get("limit") or default_limit
-            selected = sorted(filtered, key=lambda item: item.get("departure_at", ""))[
-                : int(limit)
-            ]
+            selected = sorted(filtered, key=lambda item: item.get("departure_at", ""))[: int(limit)]
+            data_source = "realtime"
+            if not selected:
+                selected = scheduled_rows_for_favorite(
+                    gtfs,
+                    stop_id,
+                    flt,
+                    now,
+                    int(limit),
+                )
+                if selected:
+                    data_source = "gtfs_schedule"
             label = flt.get("label") or f"Stop {stop_id}"
             dep_rows = []
             for row in selected:
@@ -613,6 +844,7 @@ def build_transit_payload(config: Dict[str, Any]) -> Dict[str, Any]:
                     "route_filter": flt.get("route_short_name", ""),
                     "headsign_filter": flt.get("headsign", ""),
                     "resolved_stop_name": gtfs.stop_id_to_name.get(stop_id, ""),
+                    "data_source": data_source,
                     "departures": dep_rows,
                 }
             )
