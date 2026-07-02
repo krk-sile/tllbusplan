@@ -389,8 +389,8 @@ class TallinnWidgetsCard extends HTMLElement {
     const sectionConfig = this._sectionConfig(kind);
     const selected = this._escape(section.selected);
     const defaultText = section.defaultStation
-      ? `<span class="tw-default">Default: ${this._escape(section.defaultStation)}</span>`
-      : "";
+      ? `Default: ${this._escape(section.defaultStation)}`
+      : "No default set";
 
     return `
       <ha-card class="tw-section-card">
@@ -408,24 +408,26 @@ class TallinnWidgetsCard extends HTMLElement {
             </button>
           </div>
           <div class="tw-picker">
-            <input
-              class="tw-input"
-              data-station-input="${kind}"
-              aria-label="${this._escape(sectionConfig.ariaLabel)}"
-              placeholder="${this._escape(sectionConfig.placeholder)}"
-              value="${selected}"
-              autocomplete="off"
-              spellcheck="false"
-            />
+            <div class="tw-search-row">
+              <input
+                class="tw-input"
+                data-station-input="${kind}"
+                aria-label="${this._escape(sectionConfig.ariaLabel)}"
+                placeholder="${this._escape(sectionConfig.placeholder)}"
+                value="${selected}"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button class="tw-load-button" data-load="${kind}">Show</button>
+            </div>
             <div class="tw-search-status" data-search-status="${kind}"></div>
             <div class="tw-results" data-results="${kind}">${this._stationResults(kind)}</div>
           </div>
-          <div class="tw-actions">
-            <button class="tw-primary" data-load="${kind}">Show</button>
-            <button data-save-default="${kind}" ${selected ? "" : "disabled"}>Set default</button>
-            <button data-clear-default="${kind}" ${section.defaultStation ? "" : "disabled"}>Clear</button>
+          <div class="tw-meta-actions">
+            <span class="tw-default">${defaultText}</span>
+            <button class="tw-link-button" data-save-default="${kind}" ${selected ? "" : "disabled"}>Set default</button>
+            <button class="tw-link-button" data-clear-default="${kind}" ${section.defaultStation ? "" : "disabled"}>Clear</button>
           </div>
-          ${defaultText}
           ${section.loadingDepartures ? `<div class="tw-muted">Loading...</div>` : ""}
           ${section.error && !section.searchOpen ? `<div class="tw-error">${this._escape(section.error)}</div>` : ""}
           ${this._departures(kind)}
@@ -462,15 +464,29 @@ class TallinnWidgetsCard extends HTMLElement {
 
   _departureRow(row, isTrain) {
     const line = isTrain ? row.trip || row.line || "-" : row.route || "-";
+    const tone = this._departureTone(row.due);
+    const toneClass = tone ? ` ${tone}` : "";
     return `
-      <div class="tw-row">
+      <div class="tw-row${toneClass}">
         <span class="tw-due">${this._escape(row.due || "-")}</span>
         <span class="tw-route">${this._escape(line)}</span>
-        <span class="tw-arrow" aria-hidden="true">-&gt;</span>
+        <span class="tw-arrow" aria-hidden="true">&rarr;</span>
         <span class="tw-destination">${this._escape(row.direction || "-")}</span>
         <span class="tw-time">${this._escape(row.time || "-")}</span>
       </div>
     `;
+  }
+
+  _departureTone(due) {
+    const text = String(due || "").trim().toLowerCase();
+    if (text === "now" || text === "0 min") {
+      return "is-now";
+    }
+    const match = text.match(/^(\d+)/);
+    if (match && Number(match[1]) <= 3) {
+      return "is-soon";
+    }
+    return "";
   }
 
   _render() {
@@ -563,6 +579,12 @@ class TallinnWidgetsCard extends HTMLElement {
             margin-top: 12px;
             position: relative;
           }
+          .tw-search-row {
+            align-items: center;
+            display: grid;
+            gap: 8px;
+            grid-template-columns: minmax(0, 1fr) auto;
+          }
           .tw-input,
           button {
             background: var(--card-background-color);
@@ -639,21 +661,41 @@ class TallinnWidgetsCard extends HTMLElement {
             color: var(--secondary-text-color);
             font-size: 11px;
           }
-          .tw-actions {
-            display: grid;
+          .tw-load-button {
+            background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
+            border-color: color-mix(in srgb, var(--primary-color) 30%, var(--divider-color));
+            color: var(--primary-text-color);
+            min-width: 72px;
+          }
+          .tw-load-button:hover {
+            background: color-mix(in srgb, var(--primary-color) 18%, var(--card-background-color));
+          }
+          .tw-meta-actions {
+            align-items: center;
+            display: flex;
             gap: 8px;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            margin: 8px 0;
+            margin: 2px 0 8px;
+            min-height: 24px;
           }
-          .tw-actions button {
+          .tw-default {
+            flex: 1 1 auto;
             min-width: 0;
-            width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
           }
-          .tw-primary {
-            background: var(--primary-color);
-            border-color: var(--primary-color);
-            color: var(--text-primary-color, #fff);
-            grid-column: 1 / -1;
+          .tw-link-button {
+            background: transparent;
+            border: 0;
+            color: var(--secondary-text-color);
+            flex: 0 0 auto;
+            font-size: 12px;
+            min-height: 24px;
+            min-width: 0;
+            padding: 0 2px;
+          }
+          .tw-link-button:not(:disabled):hover {
+            color: var(--primary-text-color);
           }
           .tw-icon-button {
             align-items: center;
@@ -679,16 +721,28 @@ class TallinnWidgetsCard extends HTMLElement {
           }
           .tw-list {
             display: grid;
-            margin-top: 12px;
+            margin-top: 10px;
           }
           .tw-row {
             align-items: center;
             border-bottom: 1px solid var(--divider-color);
+            border-radius: 6px;
             display: grid;
             gap: 8px;
             grid-template-columns: minmax(42px, auto) minmax(28px, auto) auto minmax(0, 1fr) auto;
             min-height: 44px;
-            padding: 8px 0;
+            margin: 0 -8px;
+            padding: 8px;
+          }
+          .tw-row.is-now {
+            background: color-mix(in srgb, var(--primary-color) 11%, transparent);
+          }
+          .tw-row.is-soon {
+            background: color-mix(in srgb, var(--primary-color) 6%, transparent);
+          }
+          .tw-row.is-now .tw-due,
+          .tw-row.is-soon .tw-due {
+            color: var(--primary-color);
           }
           .tw-due {
             color: var(--primary-text-color);
@@ -697,8 +751,9 @@ class TallinnWidgetsCard extends HTMLElement {
             white-space: nowrap;
           }
           .tw-time {
-            color: var(--primary-text-color);
-            font-size: 13px;
+            color: var(--secondary-text-color);
+            font-size: 12px;
+            font-weight: 500;
             justify-self: end;
             text-align: right;
             white-space: nowrap;
@@ -707,18 +762,20 @@ class TallinnWidgetsCard extends HTMLElement {
             background: color-mix(in srgb, var(--primary-color) 14%, transparent);
             border: 1px solid color-mix(in srgb, var(--primary-color) 34%, var(--divider-color));
             border-radius: 6px;
+            box-sizing: border-box;
             color: var(--primary-text-color);
             display: inline-flex;
             font-size: 13px;
             font-weight: 700;
             justify-content: center;
             line-height: 1;
-            max-width: 86px;
-            min-width: 28px;
+            max-width: 44px;
+            min-width: 44px;
             overflow: hidden;
             padding: 5px 7px;
             text-overflow: ellipsis;
             white-space: nowrap;
+            width: 44px;
           }
           .tw-arrow {
             color: var(--secondary-text-color);
@@ -752,8 +809,16 @@ class TallinnWidgetsCard extends HTMLElement {
               flex-direction: column;
               gap: 2px;
             }
-            .tw-actions {
+            .tw-search-row {
               grid-template-columns: 1fr;
+            }
+            .tw-load-button {
+              width: 100%;
+            }
+            .tw-meta-actions {
+              align-items: flex-start;
+              flex-direction: column;
+              gap: 2px;
             }
           }
       </style>
