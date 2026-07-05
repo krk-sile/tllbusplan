@@ -465,8 +465,13 @@ class TallinnWidgetsCard extends HTMLElement {
 
     const isTrain = kind === "elron";
     const activeRouteFilter = this._config.softRouteFilter === false ? "" : section.routeFilter;
+    const listClass = `tw-list${activeRouteFilter ? " has-route-filter" : ""}`;
     return `
-      <div class="tw-list" aria-label="${this._escape(payload.station)} departures">
+      <div
+        class="${listClass}"
+        aria-label="${this._escape(payload.station)} departures"
+        data-active-route="${this._escape(activeRouteFilter)}"
+      >
         ${rows.map((row) => this._departureRow(row, isTrain, kind, activeRouteFilter)).join("")}
       </div>
       <div class="tw-source">
@@ -477,10 +482,10 @@ class TallinnWidgetsCard extends HTMLElement {
   }
 
   _departureRow(row, isTrain, kind, activeRouteFilter) {
-    const line = isTrain ? row.trip || row.line || "-" : row.route || "-";
+    const line = this._routeLabel(row, isTrain);
     const tone = this._departureTone(row.due);
     const toneClass = tone ? ` ${tone}` : "";
-    const routeValue = String(line || "").trim();
+    const routeValue = this._routeValue(row, isTrain);
     const canFilter = this._config.softRouteFilter !== false && routeValue && routeValue !== "-";
     const isSelectedRoute = Boolean(activeRouteFilter && routeValue === activeRouteFilter);
     const isMutedRoute = Boolean(activeRouteFilter && routeValue !== activeRouteFilter);
@@ -506,6 +511,17 @@ class TallinnWidgetsCard extends HTMLElement {
         <span class="tw-time">${this._escape(row.time || "-")}</span>
       </div>
     `;
+  }
+
+  _routeLabel(row, isTrain) {
+    if (isTrain) {
+      return row.line || row.trip || "-";
+    }
+    return row.route || row.line || "-";
+  }
+
+  _routeValue(row, isTrain) {
+    return String(this._routeLabel(row, isTrain) || "").trim();
   }
 
   _departureTone(due) {
@@ -771,11 +787,15 @@ class TallinnWidgetsCard extends HTMLElement {
           .tw-row.is-soon {
             background: color-mix(in srgb, var(--primary-color) 6%, transparent);
           }
+          .tw-list.has-route-filter .tw-row:not(.is-muted-by-route) {
+            background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+          }
           .tw-row.is-muted-by-route {
-            opacity: 0.36;
+            filter: grayscale(0.75);
+            opacity: 0.24;
           }
           .tw-row.is-muted-by-route:hover {
-            opacity: 0.7;
+            opacity: 0.58;
           }
           .tw-row.is-now .tw-due,
           .tw-row.is-soon .tw-due {
@@ -818,9 +838,13 @@ class TallinnWidgetsCard extends HTMLElement {
           button.tw-route {
             cursor: pointer;
           }
+          button.tw-route:hover {
+            background: color-mix(in srgb, var(--primary-color) 22%, transparent);
+          }
           .tw-route.is-selected {
             background: var(--primary-color);
             border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 18%, transparent);
             color: var(--text-primary-color);
           }
           .tw-arrow {
@@ -928,6 +952,7 @@ class TallinnWidgetsCard extends HTMLElement {
     );
     this.querySelectorAll("[data-route-kind]").forEach((button) =>
       button.addEventListener("click", (event) => {
+        event.preventDefault();
         event.stopPropagation();
         this._toggleRouteFilter(button.dataset.routeKind, button.dataset.routeValue || "");
       })

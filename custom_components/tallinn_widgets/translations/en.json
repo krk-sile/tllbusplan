@@ -4,13 +4,18 @@
     "step": {
       "user": {
         "title": "Tallinn Widgets",
-        "description": "Configure the local Tallinn Widgets JSON file and polling intervals.",
+        "description": "Configure the local Tallinn Widgets JSON file, polling intervals, and default station-board sensors.",
         "data": {
           "config_path": "Config path",
           "transit_sensor_name": "Transit sensor name",
           "elron_sensor_name": "Elron sensor name",
           "transit_scan_interval": "Transit scan interval in seconds",
-          "elron_scan_interval": "Elron scan interval in seconds"
+          "elron_scan_interval": "Elron scan interval in seconds",
+          "station_board_bus_station": "Bus sensor station",
+          "station_board_tram_station": "Tram sensor station",
+          "station_board_train_station": "Train sensor station",
+          "station_board_window_minutes": "Station-board window in minutes",
+          "station_board_limit": "Station-board departure limit"
         }
       }
     },
@@ -22,13 +27,18 @@
     "step": {
       "init": {
         "title": "Tallinn Widgets options",
-        "description": "Update the local config path, sensor names, or polling intervals.",
+        "description": "Update the local config path, sensor names, polling intervals, and default station-board sensors.",
         "data": {
           "config_path": "Config path",
           "transit_sensor_name": "Transit sensor name",
           "elron_sensor_name": "Elron sensor name",
           "transit_scan_interval": "Transit scan interval in seconds",
-          "elron_scan_interval": "Elron scan interval in seconds"
+          "elron_scan_interval": "Elron scan interval in seconds",
+          "station_board_bus_station": "Bus sensor station",
+          "station_board_tram_station": "Tram sensor station",
+          "station_board_train_station": "Train sensor station",
+          "station_board_window_minutes": "Station-board window in minutes",
+          "station_board_limit": "Station-board departure limit"
         }
       }
     }

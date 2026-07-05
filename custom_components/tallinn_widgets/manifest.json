@@ -6,7 +6,7 @@
   "codeowners": [
     "@krk-sile"
   ],
-  "version": "1.4.5",
+  "version": "1.4.6",
   "config_flow": true,
   "requirements": [],
   "dependencies": [],

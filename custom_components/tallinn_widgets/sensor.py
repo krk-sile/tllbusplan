@@ -22,12 +22,22 @@ from .const import (
     CONF_CONFIG_PATH,
     CONF_ELRON_NAME,
     CONF_ELRON_SCAN_INTERVAL,
+    CONF_STATION_BOARD_BUS_STATION,
+    CONF_STATION_BOARD_LIMIT,
+    CONF_STATION_BOARD_TRAIN_STATION,
+    CONF_STATION_BOARD_TRAM_STATION,
+    CONF_STATION_BOARD_WINDOW_MINUTES,
     CONF_TRANSIT_NAME,
     CONF_TRANSIT_SCAN_INTERVAL,
     DEFAULT_BUS_NAME,
     DEFAULT_CONFIG_PATH,
     DEFAULT_ELRON_NAME,
     DEFAULT_ELRON_SCAN_SECONDS,
+    DEFAULT_STATION_BOARD_BUS_STATION,
+    DEFAULT_STATION_BOARD_LIMIT,
+    DEFAULT_STATION_BOARD_TRAIN_STATION,
+    DEFAULT_STATION_BOARD_TRAM_STATION,
+    DEFAULT_STATION_BOARD_WINDOW_MINUTES,
     DEFAULT_TRAIN_NAME,
     DEFAULT_TRANSIT_NAME,
     DEFAULT_TRANSIT_SCAN_SECONDS,
@@ -46,6 +56,13 @@ _LOGGER = logging.getLogger(__name__)
 STATION_BOARD_CONFIG = "station_board"
 STATION_BOARD_WINDOW_MINUTES = "window_minutes"
 STATION_BOARD_LIMIT = "limit"
+STATION_BOARD_OPTION_KEYS = {
+    "bus_station": CONF_STATION_BOARD_BUS_STATION,
+    "tram_station": CONF_STATION_BOARD_TRAM_STATION,
+    "train_station": CONF_STATION_BOARD_TRAIN_STATION,
+    STATION_BOARD_WINDOW_MINUTES: CONF_STATION_BOARD_WINDOW_MINUTES,
+    STATION_BOARD_LIMIT: CONF_STATION_BOARD_LIMIT,
+}
 STATION_BOARD_SENSOR_NAMES = {
     "bus": DEFAULT_BUS_NAME,
     "tram": DEFAULT_TRAM_NAME,
@@ -67,6 +84,26 @@ PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
         ): cv.positive_int,
         vol.Optional(
             CONF_ELRON_SCAN_INTERVAL, default=DEFAULT_ELRON_SCAN_SECONDS
+        ): cv.positive_int,
+        vol.Optional(
+            CONF_STATION_BOARD_BUS_STATION,
+            default=DEFAULT_STATION_BOARD_BUS_STATION,
+        ): cv.string,
+        vol.Optional(
+            CONF_STATION_BOARD_TRAM_STATION,
+            default=DEFAULT_STATION_BOARD_TRAM_STATION,
+        ): cv.string,
+        vol.Optional(
+            CONF_STATION_BOARD_TRAIN_STATION,
+            default=DEFAULT_STATION_BOARD_TRAIN_STATION,
+        ): cv.string,
+        vol.Optional(
+            CONF_STATION_BOARD_WINDOW_MINUTES,
+            default=DEFAULT_STATION_BOARD_WINDOW_MINUTES,
+        ): cv.positive_int,
+        vol.Optional(
+            CONF_STATION_BOARD_LIMIT,
+            default=DEFAULT_STATION_BOARD_LIMIT,
         ): cv.positive_int,
     }
 )
@@ -139,7 +176,19 @@ def _default_station_board_config() -> Dict[str, Any]:
     return dict(station_board) if isinstance(station_board, dict) else {}
 
 
-def _station_board_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def _station_board_options(config: Dict[str, Any]) -> Dict[str, Any]:
+    options = {}
+    for board_key, option_key in STATION_BOARD_OPTION_KEYS.items():
+        value = config.get(option_key)
+        if value is not None and str(value).strip() != "":
+            options[board_key] = value
+    return options
+
+
+def _station_board_config(
+    config: Dict[str, Any],
+    runtime_config: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     configured = config.get(STATION_BOARD_CONFIG, {})
     if not isinstance(configured, dict):
         configured = {}
@@ -149,6 +198,8 @@ def _station_board_config(config: Dict[str, Any]) -> Dict[str, Any]:
     merged.update(explicit)
     if explicit.get("elron_station") and "train_station" not in explicit:
         merged["train_station"] = explicit["elron_station"]
+    if runtime_config:
+        merged.update(_station_board_options(runtime_config))
     return merged
 
 
@@ -202,7 +253,10 @@ def _station_board_section(
     return result
 
 
-def _load_station_board_payload(path: Path) -> Dict[str, Any]:
+def _load_station_board_payload(
+    path: Path,
+    runtime_config: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     if not path.exists():
         return _resolve_payload_error(f"Config not found at {path}")
     try:
@@ -210,12 +264,18 @@ def _load_station_board_payload(path: Path) -> Dict[str, Any]:
     except Exception as exc:
         return _resolve_payload_error(f"Failed reading config {path}: {exc}")
 
-    board_config = _station_board_config(config)
+    board_config = _station_board_config(config, runtime_config)
     window_minutes = _positive_int(
-        board_config.get(STATION_BOARD_WINDOW_MINUTES, 60),
-        60,
+        board_config.get(
+            STATION_BOARD_WINDOW_MINUTES,
+            DEFAULT_STATION_BOARD_WINDOW_MINUTES,
+        ),
+        DEFAULT_STATION_BOARD_WINDOW_MINUTES,
     )
-    limit = _positive_int(board_config.get(STATION_BOARD_LIMIT, 80), 80)
+    limit = _positive_int(
+        board_config.get(STATION_BOARD_LIMIT, DEFAULT_STATION_BOARD_LIMIT),
+        DEFAULT_STATION_BOARD_LIMIT,
+    )
     stations = {
         "bus": str(board_config.get("bus_station", "") or "").strip(),
         "tram": str(board_config.get("tram_station", "") or "").strip(),
@@ -281,7 +341,11 @@ async def _async_add_tallinn_entities(
         return await hass.async_add_executor_job(_load_elron_payload, config_path)
 
     async def _async_load_station_board_payload() -> Dict[str, Any]:
-        return await hass.async_add_executor_job(_load_station_board_payload, config_path)
+        return await hass.async_add_executor_job(
+            _load_station_board_payload,
+            config_path,
+            config,
+        )
 
     transit_coordinator = DataUpdateCoordinator(
         hass,

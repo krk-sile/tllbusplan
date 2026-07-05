@@ -163,7 +163,7 @@ async def async_setup_api(hass: HomeAssistant) -> None:
                 StaticPathConfig(
                     "/tallinn_widgets_static",
                     str(static_path),
-                    True,
+                    False,
                 )
             ]
         )

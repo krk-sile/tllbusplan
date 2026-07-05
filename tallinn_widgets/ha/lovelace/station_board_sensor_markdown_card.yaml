@@ -1,0 +1,32 @@
+type: markdown
+title: Tallinn Departures
+entity_id:
+  - sensor.tallinn_bus_departures
+  - sensor.tallinn_tram_departures
+  - sensor.tallinn_train_departures
+card_size: 6
+content: >-
+  {% set boards = [
+    ("Bus", "sensor.tallinn_bus_departures"),
+    ("Tram", "sensor.tallinn_tram_departures"),
+    ("Train", "sensor.tallinn_train_departures")
+  ] %}
+  {% for label, entity in boards %}
+  **{{ label }} - {{ state_attr(entity, "station") or "Not configured" }}**
+
+  {% set status = state_attr(entity, "status") %}
+  {% set errors = state_attr(entity, "errors") or [] %}
+  {% if status == "error" %}
+  {{ errors | join(", ") if errors else "No data" }}
+  {% else %}
+  {% set rows = state_attr(entity, "departures") or [] %}
+  {% if rows %}
+  {% for row in rows[:5] %}
+  - `{{ row.get("due", "-") }}` {{ row.get("line") or row.get("route") or row.get("trip") or "-" }} -> {{ row.get("direction") or "-" }}{% if row.get("time") %} at {{ row.get("time") }}{% endif %}
+  {% endfor %}
+  {% else %}
+  No departures.
+  {% endif %}
+  {% endif %}
+
+  {% endfor %}
