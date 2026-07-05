@@ -4,3 +4,4 @@ tramTitle: Trams
 busTitle: Buses
 trainTitle: Trains
 windowMinutes: 60
+softRouteFilter: true

@@ -20,6 +20,13 @@
     ],
     "default_limit": 5
   },
+  "station_board": {
+    "bus_station": "A. Laikmaa",
+    "tram_station": "Kadriorg",
+    "train_station": "Keila",
+    "window_minutes": 60,
+    "limit": 80
+  },
   "trains": {
     "trips": [
       {

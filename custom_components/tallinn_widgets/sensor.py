@@ -24,16 +24,38 @@ from .const import (
     CONF_ELRON_SCAN_INTERVAL,
     CONF_TRANSIT_NAME,
     CONF_TRANSIT_SCAN_INTERVAL,
+    DEFAULT_BUS_NAME,
     DEFAULT_CONFIG_PATH,
     DEFAULT_ELRON_NAME,
     DEFAULT_ELRON_SCAN_SECONDS,
+    DEFAULT_TRAIN_NAME,
     DEFAULT_TRANSIT_NAME,
     DEFAULT_TRANSIT_SCAN_SECONDS,
+    DEFAULT_TRAM_NAME,
     DOMAIN,
 )
-from .tallinn_widget_lib import build_elron_payload, build_transit_payload, read_json_file
+from .tallinn_widget_lib import (
+    build_elron_payload,
+    build_elron_station_departures,
+    build_transit_payload,
+    build_transit_station_departures,
+    read_json_file,
+)
 
 _LOGGER = logging.getLogger(__name__)
+STATION_BOARD_CONFIG = "station_board"
+STATION_BOARD_WINDOW_MINUTES = "window_minutes"
+STATION_BOARD_LIMIT = "limit"
+STATION_BOARD_SENSOR_NAMES = {
+    "bus": DEFAULT_BUS_NAME,
+    "tram": DEFAULT_TRAM_NAME,
+    "train": DEFAULT_TRAIN_NAME,
+}
+STATION_BOARD_ICONS = {
+    "bus": "mdi:bus",
+    "tram": "mdi:tram",
+    "train": "mdi:train",
+}
 
 PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
     {
@@ -91,6 +113,125 @@ def _load_elron_payload(path: Path) -> Dict[str, Any]:
         return _resolve_payload_error(f"Failed building Elron payload: {exc}")
 
 
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def _station_board_section_error(kind: str, error: str) -> Dict[str, Any]:
+    return {
+        "status": "error",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "errors": [error],
+        "payload": {
+            "transport_type": kind,
+            "station": "",
+            "departures": [],
+            "count": 0,
+        },
+    }
+
+
+def _station_board_section(
+    config: Dict[str, Any],
+    kind: str,
+    station: str,
+    window_minutes: int,
+    limit: int,
+) -> Dict[str, Any]:
+    if not station:
+        return _station_board_section_error(
+            kind,
+            f"Missing {STATION_BOARD_CONFIG}.{kind}_station in config",
+        )
+
+    if kind in {"bus", "tram"}:
+        result = build_transit_station_departures(
+            config,
+            station,
+            window_minutes,
+            limit,
+            kind,
+        )
+    else:
+        http_conf = config.get("http", {})
+        result = build_elron_station_departures(
+            station,
+            window_minutes,
+            limit,
+            int(http_conf.get("timeout_seconds", 20)),
+            str(http_conf.get("user_agent", "HomeAssistant Tallinn Widgets")),
+        )
+
+    payload = result.setdefault("payload", {})
+    payload["transport_type"] = kind
+    return result
+
+
+def _load_station_board_payload(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return _resolve_payload_error(f"Config not found at {path}")
+    try:
+        config = read_json_file(path)
+    except Exception as exc:
+        return _resolve_payload_error(f"Failed reading config {path}: {exc}")
+
+    board_config = config.get(STATION_BOARD_CONFIG, {})
+    if not isinstance(board_config, dict):
+        board_config = {}
+    window_minutes = _positive_int(
+        board_config.get(STATION_BOARD_WINDOW_MINUTES, 60),
+        60,
+    )
+    limit = _positive_int(board_config.get(STATION_BOARD_LIMIT, 80), 80)
+    stations = {
+        "bus": str(board_config.get("bus_station", "") or "").strip(),
+        "tram": str(board_config.get("tram_station", "") or "").strip(),
+        "train": str(
+            board_config.get("train_station", "")
+            or board_config.get("elron_station", "")
+            or ""
+        ).strip(),
+    }
+
+    sections: Dict[str, Dict[str, Any]] = {}
+    errors = []
+    for kind, station in stations.items():
+        try:
+            section = _station_board_section(
+                config,
+                kind,
+                station,
+                window_minutes,
+                limit,
+            )
+        except Exception as exc:
+            _LOGGER.debug("Failed building Tallinn %s station payload", kind, exc_info=True)
+            section = _station_board_section_error(
+                kind,
+                f"Failed building {kind} station payload: {exc}",
+            )
+        sections[kind] = section
+        errors.extend(section.get("errors", []))
+
+    if all(section.get("status") == "error" for section in sections.values()):
+        status = "error"
+    elif errors:
+        status = "partial"
+    else:
+        status = "ok"
+
+    return {
+        "status": status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "errors": errors,
+        "payload": {"sections": sections},
+    }
+
+
 async def _async_add_tallinn_entities(
     hass: HomeAssistant,
     config: ConfigType,
@@ -110,6 +251,9 @@ async def _async_add_tallinn_entities(
     async def _async_load_elron_payload() -> Dict[str, Any]:
         return await hass.async_add_executor_job(_load_elron_payload, config_path)
 
+    async def _async_load_station_board_payload() -> Dict[str, Any]:
+        return await hass.async_add_executor_job(_load_station_board_payload, config_path)
+
     transit_coordinator = DataUpdateCoordinator(
         hass,
         logger=_LOGGER,
@@ -126,8 +270,17 @@ async def _async_add_tallinn_entities(
         update_method=_async_load_elron_payload,
     )
 
+    station_board_coordinator = DataUpdateCoordinator(
+        hass,
+        logger=_LOGGER,
+        name="Tallinn Station Board",
+        update_interval=min(transit_interval, elron_interval),
+        update_method=_async_load_station_board_payload,
+    )
+
     await transit_coordinator.async_config_entry_first_refresh()
     await elron_coordinator.async_config_entry_first_refresh()
+    await station_board_coordinator.async_config_entry_first_refresh()
 
     async_add_entities(
         [
@@ -140,6 +293,14 @@ async def _async_add_tallinn_entities(
                 elron_coordinator,
                 config.get(CONF_ELRON_NAME, DEFAULT_ELRON_NAME),
                 "elron",
+            ),
+            *(
+                _StationBoardSensorEntity(
+                    station_board_coordinator,
+                    name,
+                    kind,
+                )
+                for kind, name in STATION_BOARD_SENSOR_NAMES.items()
             ),
         ],
         True,
@@ -195,4 +356,61 @@ class _TallinnSensorEntity(CoordinatorEntity, SensorEntity):
             "payload": self.coordinator.data.get("payload", {}),
             "errors": self.coordinator.data.get("errors", []),
             "status": self.coordinator.data.get("status", "error"),
+        }
+
+
+class _StationBoardSensorEntity(CoordinatorEntity, SensorEntity):
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: DataUpdateCoordinator, name: str, kind: str):
+        super().__init__(coordinator)
+        self._kind = kind
+        self._attr_name = name
+        self._attr_unique_id = f"{DOMAIN}_{kind}"
+        self._attr_icon = STATION_BOARD_ICONS.get(kind)
+
+    def _section(self) -> Dict[str, Any]:
+        if not self.coordinator.data:
+            return _station_board_section_error(self._kind, "No data yet")
+        sections = self.coordinator.data.get("payload", {}).get("sections", {})
+        section = sections.get(self._kind)
+        if not isinstance(section, dict):
+            errors = self.coordinator.data.get("errors", [])
+            message = "; ".join(str(error) for error in errors) or "No data yet"
+            return _station_board_section_error(self._kind, message)
+        return section
+
+    def _departure_label(self, row: Dict[str, Any]) -> str:
+        route = row.get("line") or row.get("route") or row.get("trip") or ""
+        due = row.get("due") or row.get("in_minutes") or row.get("time") or ""
+        label = " ".join(str(part).strip() for part in (route, due) if part)
+        return label or "next"
+
+    @property
+    def native_value(self) -> str:
+        section = self._section()
+        payload = section.get("payload", {})
+        if section.get("status") == "error":
+            return "error"
+        departures = payload.get("departures", [])
+        if departures and isinstance(departures[0], dict):
+            return self._departure_label(departures[0])
+        return "none"
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        section = self._section()
+        payload = section.get("payload", {})
+        departures = payload.get("departures", [])
+        next_departure = departures[0] if departures and isinstance(departures[0], dict) else None
+
+        return {
+            "payload": payload,
+            "errors": section.get("errors", []),
+            "status": section.get("status", "error"),
+            "transport_type": self._kind,
+            "station": payload.get("station", ""),
+            "departures": departures,
+            "next_departure": next_departure,
+            "updated_at": section.get("updated_at", ""),
         }

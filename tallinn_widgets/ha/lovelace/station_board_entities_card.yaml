@@ -1,0 +1,10 @@
+type: entities
+title: Tallinn Departures
+show_header_toggle: false
+entities:
+  - entity: sensor.tallinn_bus_departures
+    name: Bus
+  - entity: sensor.tallinn_tram_departures
+    name: Tram
+  - entity: sensor.tallinn_train_departures
+    name: Train

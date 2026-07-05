@@ -36,6 +36,8 @@ config path, Tallinn Widgets falls back to its bundled example config.
 Edit:
 
 - `transit.favorites` for Tallinn public transport favorites.
+- `station_board.bus_station`, `station_board.tram_station`, and
+  `station_board.train_station` for the split bus/tram/train sensors.
 - `trains.trips` for Elron trip IDs.
 
 ## Dashboard Cards
@@ -43,6 +45,7 @@ Edit:
 This release includes Lovelace card snippets:
 
 - `tallinn_widgets/ha/lovelace/station_board_card.yaml`
+- `tallinn_widgets/ha/lovelace/station_board_entities_card.yaml`
 - `tallinn_widgets/ha/lovelace/tallinn_transit_card.yaml`
 - `tallinn_widgets/ha/lovelace/elron_train_card.yaml`
 
@@ -53,7 +56,19 @@ For the station board, add this Lovelace resource as a JavaScript module:
 ```
 
 Then add `station_board_card.yaml` as a manual card. Station defaults are saved
-only in local browser storage.
+only in local browser storage. Clicking a route badge softly fades the other
+routes in that transport column; set `softRouteFilter: false` on the card to
+disable that behavior.
+
+For stock Home Assistant cards, the integration also creates these sensors from
+the `station_board` config:
+
+- `sensor.tallinn_bus_departures`
+- `sensor.tallinn_tram_departures`
+- `sensor.tallinn_train_departures`
+
+`station_board_entities_card.yaml` is a minimal built-in entities-card example
+for those three entities.
 
 The other two snippets are Markdown cards backed by the integration sensors. If
 Home Assistant assigns different entity IDs, adjust the

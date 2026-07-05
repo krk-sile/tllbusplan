@@ -15,6 +15,7 @@ class TallinnWidgetsCard extends HTMLElement {
       transitTitle: "Buses + Trams",
       trainTitle: "Trains",
       windowMinutes: 60,
+      softRouteFilter: true,
       ...config,
     };
     this._state = this._state || this._initialState();
@@ -69,6 +70,7 @@ class TallinnWidgetsCard extends HTMLElement {
       requestId: 0,
       searchOpen: false,
       activeIndex: -1,
+      routeFilter: "",
     };
   }
 
@@ -276,6 +278,7 @@ class TallinnWidgetsCard extends HTMLElement {
     section.query = station;
     section.searchOpen = false;
     section.activeIndex = -1;
+    section.routeFilter = "";
     const input = this.querySelector(`[data-station-input="${kind}"]`);
     if (input) {
       input.value = station;
@@ -283,6 +286,16 @@ class TallinnWidgetsCard extends HTMLElement {
     this._updateStationResults(kind);
     this._syncPickerControls(kind);
     this._loadDepartures(kind);
+  }
+
+  _toggleRouteFilter(kind, route) {
+    const section = this._state[kind];
+    const nextRoute = String(route || "").trim();
+    if (!section || !nextRoute || this._config.softRouteFilter === false) {
+      return;
+    }
+    section.routeFilter = section.routeFilter === nextRoute ? "" : nextRoute;
+    this._render();
   }
 
   _saveDefault(kind) {
@@ -451,9 +464,10 @@ class TallinnWidgetsCard extends HTMLElement {
     }
 
     const isTrain = kind === "elron";
+    const activeRouteFilter = this._config.softRouteFilter === false ? "" : section.routeFilter;
     return `
       <div class="tw-list" aria-label="${this._escape(payload.station)} departures">
-        ${rows.map((row) => this._departureRow(row, isTrain)).join("")}
+        ${rows.map((row) => this._departureRow(row, isTrain, kind, activeRouteFilter)).join("")}
       </div>
       <div class="tw-source">
         <span>${this._escape(payload.data_source || "")}</span>
@@ -462,14 +476,31 @@ class TallinnWidgetsCard extends HTMLElement {
     `;
   }
 
-  _departureRow(row, isTrain) {
+  _departureRow(row, isTrain, kind, activeRouteFilter) {
     const line = isTrain ? row.trip || row.line || "-" : row.route || "-";
     const tone = this._departureTone(row.due);
     const toneClass = tone ? ` ${tone}` : "";
+    const routeValue = String(line || "").trim();
+    const canFilter = this._config.softRouteFilter !== false && routeValue && routeValue !== "-";
+    const isSelectedRoute = Boolean(activeRouteFilter && routeValue === activeRouteFilter);
+    const isMutedRoute = Boolean(activeRouteFilter && routeValue !== activeRouteFilter);
+    const routeClass = `tw-route${isSelectedRoute ? " is-selected" : ""}`;
+    const routeBadge = canFilter
+      ? `
+        <button
+          class="${routeClass}"
+          data-route-kind="${this._escape(kind)}"
+          data-route-value="${this._escape(routeValue)}"
+          aria-pressed="${isSelectedRoute ? "true" : "false"}"
+          title="${isSelectedRoute ? "Clear route focus" : `Focus route ${this._escape(routeValue)}`}"
+          type="button"
+        >${this._escape(line)}</button>
+      `
+      : `<span class="${routeClass}">${this._escape(line)}</span>`;
     return `
-      <div class="tw-row${toneClass}">
+      <div class="tw-row${toneClass}${isMutedRoute ? " is-muted-by-route" : ""}">
         <span class="tw-due">${this._escape(row.due || "-")}</span>
-        <span class="tw-route">${this._escape(line)}</span>
+        ${routeBadge}
         <span class="tw-arrow" aria-hidden="true">&rarr;</span>
         <span class="tw-destination">${this._escape(row.direction || "-")}</span>
         <span class="tw-time">${this._escape(row.time || "-")}</span>
@@ -740,6 +771,12 @@ class TallinnWidgetsCard extends HTMLElement {
           .tw-row.is-soon {
             background: color-mix(in srgb, var(--primary-color) 6%, transparent);
           }
+          .tw-row.is-muted-by-route {
+            opacity: 0.36;
+          }
+          .tw-row.is-muted-by-route:hover {
+            opacity: 0.7;
+          }
           .tw-row.is-now .tw-due,
           .tw-row.is-soon .tw-due {
             color: var(--primary-color);
@@ -770,12 +807,21 @@ class TallinnWidgetsCard extends HTMLElement {
             justify-content: center;
             line-height: 1;
             max-width: 44px;
+            min-height: 28px;
             min-width: 44px;
             overflow: hidden;
             padding: 5px 7px;
             text-overflow: ellipsis;
             white-space: nowrap;
             width: 44px;
+          }
+          button.tw-route {
+            cursor: pointer;
+          }
+          .tw-route.is-selected {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: var(--text-primary-color);
           }
           .tw-arrow {
             color: var(--secondary-text-color);
@@ -879,6 +925,12 @@ class TallinnWidgetsCard extends HTMLElement {
     );
     this.querySelectorAll("[data-clear-default]").forEach((button) =>
       button.addEventListener("click", () => this._clearDefault(button.dataset.clearDefault))
+    );
+    this.querySelectorAll("[data-route-kind]").forEach((button) =>
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this._toggleRouteFilter(button.dataset.routeKind, button.dataset.routeValue || "");
+      })
     );
     for (const sectionConfig of this._sectionConfigs()) {
       this._bindResultEvents(sectionConfig.kind);
