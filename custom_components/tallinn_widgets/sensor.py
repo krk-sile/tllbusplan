@@ -121,6 +121,37 @@ def _positive_int(value: Any, default: int) -> int:
     return max(1, parsed)
 
 
+def _nonblank_config_items(config: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in config.items()
+        if value is not None and str(value).strip() != ""
+    }
+
+
+def _default_station_board_config() -> Dict[str, Any]:
+    default_config_path = Path(__file__).with_name("config.example.json")
+    try:
+        config = read_json_file(default_config_path)
+    except Exception:
+        return {}
+    station_board = config.get(STATION_BOARD_CONFIG, {})
+    return dict(station_board) if isinstance(station_board, dict) else {}
+
+
+def _station_board_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    configured = config.get(STATION_BOARD_CONFIG, {})
+    if not isinstance(configured, dict):
+        configured = {}
+
+    explicit = _nonblank_config_items(configured)
+    merged = _default_station_board_config()
+    merged.update(explicit)
+    if explicit.get("elron_station") and "train_station" not in explicit:
+        merged["train_station"] = explicit["elron_station"]
+    return merged
+
+
 def _station_board_section_error(kind: str, error: str) -> Dict[str, Any]:
     return {
         "status": "error",
@@ -179,9 +210,7 @@ def _load_station_board_payload(path: Path) -> Dict[str, Any]:
     except Exception as exc:
         return _resolve_payload_error(f"Failed reading config {path}: {exc}")
 
-    board_config = config.get(STATION_BOARD_CONFIG, {})
-    if not isinstance(board_config, dict):
-        board_config = {}
+    board_config = _station_board_config(config)
     window_minutes = _positive_int(
         board_config.get(STATION_BOARD_WINDOW_MINUTES, 60),
         60,
